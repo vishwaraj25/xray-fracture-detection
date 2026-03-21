@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BoneAI — Fracture Detection System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #05080d;
+  --panel:     #0c1018;
+  --card:      #111620;
+  --border:    rgba(100,180,255,0.1);
+  --border2:   rgba(100,180,255,0.2);
+  --text:      #c8d8f0;
+  --muted:     #4a6080;
+  --accent:    #38b6ff;
+  --green:     #00e5a0;
+  --red:       #ff4d6a;
+  --amber:     #ffb347;
+  --mono:      'IBM Plex Mono', monospace;
+  --sans:      'IBM Plex Sans', sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  font-size: 14px;
+}
+
+/* scanline overlay */
+body::after {
+  content: '';
+  position: fixed; inset: 0; z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+}
+
+/* ── Layout ── */
+.shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  grid-template-rows: 56px 1fr;
+  min-height: 100vh;
+}
+
+/* ── Top bar ── */
+.topbar {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: 15px; font-weight: 500;
+  letter-spacing: 1px;
+}
+.brand-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.topbar-meta {
+  display: flex; align-items: center; gap: 20px;
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+.status-chip {
+  padding: 3px 10px; border-radius: 3px;
+  border: 1px solid var(--border2);
+  color: var(--accent); font-size: 10px; letter-spacing: 1px;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 20px 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sidebar-section {
+  padding: 6px 20px 2px;
+  font-size: 9px; letter-spacing: 2px; color: var(--muted);
+  font-family: var(--mono);
+}
+.sidebar-item {
+  padding: 8px 20px;
+  font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: all .15s;
+}
+.sidebar-item:hover { color: var(--text); background: rgba(56,182,255,0.05); }
+.sidebar-item.active {
+  color: var(--accent); border-left-color: var(--accent);
+  background: rgba(56,182,255,0.07);
+}
+.sidebar-item .icon { width: 14px; text-align: center; font-size: 12px; opacity: .7; }
+
+.sidebar-metrics {
+  margin-top: auto;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+.metric-mini { margin-bottom: 10px; }
+.metric-mini .lbl { font-size: 9px; letter-spacing: 1px; color: var(--muted); font-family: var(--mono); }
+.metric-mini .val { font-size: 18px; font-weight: 600; color: var(--accent); font-family: var(--mono); }
+.metric-mini .sub { font-size: 9px; color: var(--muted); }
+
+/* ── Main content ── */
+.main {
+  padding: 24px;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+/* ── Section header ── */
+.section-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 12px;
+}
+.section-head .tag {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 2px;
+  color: var(--muted); padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 2px;
+}
+.section-head h2 { font-size: 13px; font-weight: 500; color: var(--text); }
+
+/* ── Upload zone ── */
+.upload-zone {
+  border: 1px dashed var(--border2);
+  border-radius: 6px;
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  transition: border-color .2s, background .2s;
+  background: var(--card);
+}
+.upload-zone:hover, .upload-zone.drag {
+  border-color: var(--accent);
+  background: rgba(56,182,255,0.04);
+}
+.upload-zone input {
+  position: absolute; inset: 0; opacity: 0;
+  cursor: pointer; width: 100%; height: 100%;
+}
+.upload-icon {
+  font-size: 28px; margin-bottom: 12px; opacity: .5;
+}
+.upload-zone h3 { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+.upload-zone p  { font-size: 11px; color: var(--muted); }
+.upload-hint {
+  margin-top: 12px; display: flex; justify-content: center; gap: 8px;
+}
+.hint-tag {
+  font-family: var(--mono); font-size: 10px;
+  padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: 2px; color: var(--muted);
+}
+
+/* ── Pipeline ── */
+#pipeline { display: none; }
+
+.pipeline-track {
+  display: flex; align-items: center; gap: 0;
+  margin-bottom: 20px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.pipeline-step {
+  flex: 1; padding: 10px 8px; text-align: center;
+  border-right: 1px solid var(--border);
+  transition: background .3s;
+  position: relative;
+}
+.pipeline-step:last-child { border-right: none; }
+.pipeline-step .step-num {
+  font-family: var(--mono); font-size: 9px;
+  color: var(--muted); letter-spacing: 1px;
+}
+.pipeline-step .step-name {
+  font-size: 10px; font-weight: 500; color: var(--muted);
+  margin-top: 2px;
+}
+.pipeline-step.active { background: rgba(56,182,255,0.08); }
+.pipeline-step.active .step-name { color: var(--accent); }
+.pipeline-step.done { background: rgba(0,229,160,0.05); }
+.pipeline-step.done .step-name { color: var(--green); }
+.pipeline-step.done::after {
+  content: '✓';
+  position: absolute; top: 6px; right: 6px;
+  font-size: 8px; color: var(--green);
+}
+
+/* ── Stage images grid ── */
+.stages-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.stage-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity .35s ease, transform .35s ease, border-color .3s;
+}
+.stage-card.visible { opacity: 1; transform: translateY(0); }
+.stage-card.active  { border-color: var(--accent); }
+.stage-card img     { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; filter: brightness(.85) contrast(1.1); }
+.stage-card.overlay-card img { filter: none; }
+.stage-info { padding: 6px 8px; border-top: 1px solid var(--border); }
+.stage-info .s-label { font-family: var(--mono); font-size: 9px; letter-spacing: 1px; color: var(--muted); }
+.stage-info .s-desc  { font-size: 10px; color: var(--text); margin-top: 1px; }
+
+/* ── Progress ── */
+.progress-row {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 16px;
+}
+.progress-bar {
+  flex: 1; height: 2px; background: var(--card); border-radius: 1px;
+}
+.progress-fill {
+  height: 100%; width: 0%; border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  transition: width .4s ease;
+}
+.progress-label { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; }
+.progress-pct   { font-family: var(--mono); font-size: 10px; color: var(--accent); min-width: 32px; text-align: right; }
+
+/* ── Result ── */
+#result { display: none; }
+
+.result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.verdict-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 24px;
+}
+.verdict-card.frac { border-color: rgba(255,77,106,0.4); }
+.verdict-card.safe { border-color: rgba(0,229,160,0.4); }
+
+.verdict-label {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 2px; color: var(--muted); margin-bottom: 10px;
+}
+.verdict-text {
+  font-family: var(--mono); font-size: 26px; font-weight: 500;
+  letter-spacing: 1px; margin-bottom: 20px;
+}
+.verdict-text.frac { color: var(--red); }
+.verdict-text.safe { color: var(--green); }
+
+/* Confidence bar */
+.conf-label { font-size: 11px; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
+.conf-track { height: 4px; background: rgba(255,255,255,0.06); border-radius: 2px; margin-bottom: 20px; }
+.conf-fill  { height: 100%; border-radius: 2px; width: 0%; transition: width 1s ease; }
+.conf-fill.frac { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.conf-fill.safe { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+.verdict-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.v-chip { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 4px; padding: 10px; }
+.v-chip .lbl { font-size: 9px; letter-spacing: 1px; color: var(--muted); font-family: var(--mono); margin-bottom: 4px; }
+.v-chip .val { font-size: 14px; font-weight: 500; font-family: var(--mono); }
+
+/* Info panel */
+.info-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+}
+.info-panel h3 { font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 1px; margin-bottom: 14px; font-family: var(--mono); }
+.info-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.info-row:last-child { border-bottom: none; }
+.info-row .key { font-size: 11px; color: var(--muted); }
+.info-row .val { font-size: 11px; font-family: var(--mono); color: var(--text); }
+.info-row .val.green { color: var(--green); }
+.info-row .val.red   { color: var(--red); }
+
+.disclaimer {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: rgba(255,179,71,0.06);
+  border: 1px solid rgba(255,179,71,0.2);
+  border-radius: 4px;
+  font-size: 10px; color: var(--amber); line-height: 1.6;
+}
+
+/* ── Again button ── */
+#btn-again {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-family: var(--mono); font-size: 11px;
+  padding: 8px 20px; border-radius: 4px;
+  cursor: pointer; letter-spacing: 1px;
+  transition: border-color .2s, background .2s;
+}
+#btn-again:hover { border-color: var(--accent); background: rgba(56,182,255,0.06); }
+
+/* ── Model metrics section ── */
+#model-metrics { display: none; }
+.metrics-grid  { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.metric-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+.metric-card .num {
+  font-family: var(--mono); font-size: 22px; font-weight: 500;
+  color: var(--accent); margin-bottom: 4px;
+}
+.metric-card .lbl { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+
+/* confusion matrix */
+.cm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+.cm-cell {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 4px; padding: 12px;
+  text-align: center;
+}
+.cm-cell .cm-num { font-family: var(--mono); font-size: 20px; font-weight: 500; }
+.cm-cell .cm-lbl { font-size: 9px; color: var(--muted); margin-top: 2px; letter-spacing: 1px; }
+.cm-cell.tp .cm-num { color: var(--green); }
+.cm-cell.tn .cm-num { color: var(--green); }
+.cm-cell.fp .cm-num { color: var(--red); }
+.cm-cell.fn .cm-num { color: var(--red); }
+
+@media (max-width: 768px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .stages-grid { grid-template-columns: repeat(3, 1fr); }
+  .result-grid { grid-template-columns: 1fr; }
+  .metrics-grid { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-dot"></div>
+      BONE<span style="color:var(--muted)">AI</span>
+    </div>
+    <div class="topbar-meta">
+      <span>HOG · LBP · HU MOMENTS · SVM</span>
+      <span class="status-chip" id="sys-status">SYSTEM READY</span>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-section">NAVIGATION</div>
+    <div class="sidebar-item active"><span class="icon">⬛</span> Analysis</div>
+    <div class="sidebar-item" onclick="scrollToMetrics()"><span class="icon">◈</span> Model Metrics</div>
+
+    <div class="sidebar-section" style="margin-top:16px">PIPELINE</div>
+    <div class="sidebar-item"><span class="icon">①</span> Preprocessing</div>
+    <div class="sidebar-item"><span class="icon">②</span> Feature Extraction</div>
+    <div class="sidebar-item"><span class="icon">③</span> SVM Classifier</div>
+    <div class="sidebar-item"><span class="icon">④</span> Contour Analysis</div>
+
+    <div class="sidebar-metrics" id="sidebar-metrics" style="display:none">
+      <div class="metric-mini">
+        <div class="lbl">ACCURACY</div>
+        <div class="val" id="sb-acc">—</div>
+        <div class="sub">test set</div>
+      </div>
+      <div class="metric-mini">
+        <div class="lbl">ROC-AUC</div>
+        <div class="val" id="sb-auc">—</div>
+        <div class="sub">5-fold CV</div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- Upload -->
+    <div id="upload-section">
+      <div class="section-head">
+        <span class="tag">INPUT</span>
+        <h2>Upload X-Ray Image</h2>
+      </div>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="file-input" accept="image/*">
+        <div class="upload-icon">⬆</div>
+        <h3>Drop bone X-ray here</h3>
+        <p>Supports JPG, PNG, BMP — any bone X-ray image</p>
+        <div class="upload-hint">
+          <span class="hint-tag">wrist</span>
+          <span class="hint-tag">hip</span>
+          <span class="hint-tag">spine</span>
+          <span class="hint-tag">knee</span>
+          <span class="hint-tag">limbs</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pipeline -->
+    <div id="pipeline">
+      <div class="section-head">
+        <span class="tag">PIPELINE</span>
+        <h2>Processing</h2>
+      </div>
+
+      <div class="pipeline-track">
+        <div class="pipeline-step" id="ps-1"><div class="step-num">01</div><div class="step-name">CLAHE</div></div>
+        <div class="pipeline-step" id="ps-2"><div class="step-num">02</div><div class="step-name">BLUR</div></div>
+        <div class="pipeline-step" id="ps-3"><div class="step-num">03</div><div class="step-name">EDGES</div></div>
+        <div class="pipeline-step" id="ps-4"><div class="step-num">04</div><div class="step-name">HOG+LBP+HU</div></div>
+        <div class="pipeline-step" id="ps-5"><div class="step-num">05</div><div class="step-name">SVM</div></div>
+        <div class="pipeline-step" id="ps-6"><div class="step-num">06</div><div class="step-name">CONTOURS</div></div>
+      </div>
+
+      <div class="progress-row">
+        <span class="progress-label" id="prog-label">Initialising...</span>
+        <div class="progress-bar"><div class="progress-fill" id="prog-fill"></div></div>
+        <span class="progress-pct" id="prog-pct">0%</span>
+      </div>
+
+      <div class="stages-grid">
+        <div class="stage-card" id="sc-original">
+          <img id="si-original" src="" alt="">
+          <div class="stage-info"><div class="s-label">ORIGINAL</div><div class="s-desc">Raw X-ray input</div></div>
+        </div>
+        <div class="stage-card" id="sc-gray">
+          <img id="si-gray" src="" alt="">
+          <div class="stage-info"><div class="s-label">GRAYSCALE</div><div class="s-desc">Remove colour info</div></div>
+        </div>
+        <div class="stage-card" id="sc-clahe">
+          <img id="si-clahe" src="" alt="">
+          <div class="stage-info"><div class="s-label">CLAHE</div><div class="s-desc">Local contrast boost</div></div>
+        </div>
+        <div class="stage-card" id="sc-blur">
+          <img id="si-blur" src="" alt="">
+          <div class="stage-info"><div class="s-label">GAUSSIAN BLUR</div><div class="s-desc">Noise suppression</div></div>
+        </div>
+        <div class="stage-card" id="sc-edges">
+          <img id="si-edges" src="" alt="">
+          <div class="stage-info"><div class="s-label">CANNY EDGES</div><div class="s-desc">Bone boundaries</div></div>
+        </div>
+        <div class="stage-card overlay-card" id="sc-overlay">
+          <img id="si-overlay" src="" alt="">
+          <div class="stage-info"><div class="s-label">CONTOUR ANALYSIS</div><div class="s-desc">Suspicious regions</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div id="result">
+      <div class="section-head">
+        <span class="tag">RESULT</span>
+        <h2>Analysis Report</h2>
+      </div>
+
+      <div class="result-grid">
+        <div class="verdict-card" id="verdict-card">
+          <div class="verdict-label">DIAGNOSIS</div>
+          <div class="verdict-text" id="verdict-text">—</div>
+
+          <div class="conf-label">
+            <span>Confidence</span>
+            <span id="conf-pct">—</span>
+          </div>
+          <div class="conf-track">
+            <div class="conf-fill" id="conf-fill"></div>
+          </div>
+
+          <div class="verdict-chips">
+            <div class="v-chip">
+              <div class="lbl">CLASSIFIER</div>
+              <div class="val">SVM RBF</div>
+            </div>
+            <div class="v-chip">
+              <div class="lbl">FEATURES</div>
+              <div class="val">HOG+LBP+HU</div>
+            </div>
+            <div class="v-chip">
+              <div class="lbl">PREPROCESSING</div>
+              <div class="val">CLAHE</div>
+            </div>
+            <div class="v-chip">
+              <div class="lbl">EDGE METHOD</div>
+              <div class="val">CANNY</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="info-panel">
+          <h3>ANALYSIS DETAILS</h3>
+          <div class="info-row">
+            <span class="key">Pipeline stages</span>
+            <span class="val">6 steps</span>
+          </div>
+          <div class="info-row">
+            <span class="key">Feature dimensions</span>
+            <span class="val" id="info-dims">HOG + LBP + Hu</span>
+          </div>
+          <div class="info-row">
+            <span class="key">Contour filtering</span>
+            <span class="val">Area + circularity</span>
+          </div>
+          <div class="info-row">
+            <span class="key">Model kernel</span>
+            <span class="val">RBF (C=10)</span>
+          </div>
+          <div class="info-row">
+            <span class="key">Contours detected</span>
+            <span class="val" id="info-contours">—</span>
+          </div>
+          <div class="info-row">
+            <span class="key">Status</span>
+            <span class="val green">COMPLETE</span>
+          </div>
+          <div class="disclaimer">
+            ⚠ Research prototype only. Not certified for clinical use.
+            Always consult a qualified radiologist for medical diagnosis.
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button id="btn-again" onclick="resetUI()">↺ &nbsp;Analyse Another Image</button>
+      </div>
+    </div>
+
+    <!-- Model Metrics -->
+    <div id="model-metrics">
+      <div class="section-head" style="margin-top:8px">
+        <span class="tag">MODEL</span>
+        <h2>Performance Metrics</h2>
+      </div>
+      <div class="metrics-grid" id="metrics-grid"></div>
+
+      <div style="margin-top:16px; display:grid; grid-template-columns:1fr 1fr; gap:16px">
+        <div>
+          <div class="section-head" style="margin-top:0"><h2 style="font-size:11px;color:var(--muted)">CONFUSION MATRIX</h2></div>
+          <div class="cm-grid" id="cm-grid"></div>
+        </div>
+        <div>
+          <div class="section-head" style="margin-top:0"><h2 style="font-size:11px;color:var(--muted)">PER-CLASS REPORT</h2></div>
+          <div id="class-report" style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:16px"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+const STAGES   = ["original","gray","clahe","blur","edges","overlay"];
+const PS_COUNT = 6;
+let animInt = null;
+
+// drag & drop
+const zone = document.getElementById("upload-zone");
+zone.addEventListener("dragover",  e => { e.preventDefault(); zone.classList.add("drag"); });
+zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
+zone.addEventListener("drop", e => {
+  e.preventDefault(); zone.classList.remove("drag");
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+document.getElementById("file-input").addEventListener("change", e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+function setProgress(label, pct) {
+  document.getElementById("prog-label").textContent = label;
+  document.getElementById("prog-pct").textContent   = pct + "%";
+  document.getElementById("prog-fill").style.width  = pct + "%";
+}
+
+function activatePipelineStep(n) {
+  for (let i = 1; i <= PS_COUNT; i++) {
+    const el = document.getElementById("ps-" + i);
+    el.classList.remove("active");
+    if (i < n) el.classList.add("done"); else el.classList.remove("done");
+  }
+  if (n <= PS_COUNT) document.getElementById("ps-" + n).classList.add("active");
+}
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => startAnalysis(e.target.result);
+  reader.readAsDataURL(file);
+}
+
+function startAnalysis(dataUrl) {
+  document.getElementById("upload-section").style.display = "none";
+  document.getElementById("pipeline").style.display = "block";
+  document.getElementById("result").style.display   = "none";
+  document.getElementById("btn-again").style.display = "none";
+
+  // reset all stage cards
+  STAGES.forEach(s => {
+    const c = document.getElementById("sc-" + s);
+    c.classList.remove("visible","active");
+  });
+
+  setProgress("Sending image to pipeline...", 5);
+  document.getElementById("sys-status").textContent = "PROCESSING";
+
+  // animate pipeline steps while waiting
+  let step = 1;
+  const stepLabels = [
+    "Applying CLAHE contrast enhancement...",
+    "Running Gaussian blur...",
+    "Detecting edges with Canny...",
+    "Extracting HOG + LBP + Hu Moments...",
+    "Running SVM classifier...",
+    "Filtering contours by area & circularity...",
+  ];
+  animInt = setInterval(() => {
+    if (step <= PS_COUNT) {
+      activatePipelineStep(step);
+      setProgress(stepLabels[step - 1], Math.round(5 + step * 14));
+      step++;
+    }
+  }, 700);
+
+  fetch("/predict", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: dataUrl }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    clearInterval(animInt);
+    if (data.error) { setProgress("Error: " + data.error, 0); return; }
+    revealResult(data);
+  })
+  .catch(err => {
+    clearInterval(animInt);
+    setProgress("Server error — is app.py running?", 0);
+  });
+}
+
+function revealResult(data) {
+  // Fill stage images one by one
+  STAGES.forEach((s, i) => {
+    if (data.stages && data.stages[s]) {
+      document.getElementById("si-" + s).src = "data:image/png;base64," + data.stages[s];
+    }
+    const card = document.getElementById("sc-" + s);
+    card.classList.remove("active");
+    setTimeout(() => card.classList.add("visible"), i * 180);
+  });
+
+  // Complete pipeline track
+  for (let i = 1; i <= PS_COUNT; i++) {
+    document.getElementById("ps-" + i).classList.add("done");
+    document.getElementById("ps-" + i).classList.remove("active");
+  }
+  setProgress("Analysis complete", 100);
+  document.getElementById("sys-status").textContent = "COMPLETE";
+
+  setTimeout(() => {
+    const isFrac  = data.label === 1;
+    const pct     = Math.round(data.confidence * 100);
+
+    // Verdict card
+    document.getElementById("result").style.display = "block";
+    const vc = document.getElementById("verdict-card");
+    vc.className = "verdict-card " + (isFrac ? "frac" : "safe");
+
+    const vt = document.getElementById("verdict-text");
+    vt.textContent  = data.prediction;
+    vt.className    = "verdict-text " + (isFrac ? "frac" : "safe");
+
+    document.getElementById("conf-pct").textContent = pct + "%";
+    const fill = document.getElementById("conf-fill");
+    fill.className = "conf-fill " + (isFrac ? "frac" : "safe");
+    setTimeout(() => { fill.style.width = pct + "%"; }, 100);
+
+    document.getElementById("btn-again").style.display = "inline-block";
+  }, STAGES.length * 180 + 300);
+}
+
+function resetUI() {
+  document.getElementById("upload-section").style.display = "block";
+  document.getElementById("pipeline").style.display = "none";
+  document.getElementById("result").style.display   = "none";
+  document.getElementById("file-input").value = "";
+  document.getElementById("sys-status").textContent = "SYSTEM READY";
+}
+
+function scrollToMetrics() {
+  document.getElementById("model-metrics").scrollIntoView({ behavior: "smooth" });
+}
+
+// Load model metrics on page load
+fetch("/metrics")
+  .then(r => r.json())
+  .then(m => {
+    if (m.error) return;
+
+    document.getElementById("model-metrics").style.display = "block";
+    document.getElementById("sidebar-metrics").style.display = "block";
+    document.getElementById("sb-acc").textContent = (m.accuracy * 100).toFixed(1) + "%";
+    document.getElementById("sb-auc").textContent = m.roc_auc.toFixed(3);
+
+    const grid = document.getElementById("metrics-grid");
+    const tiles = [
+      { num: (m.accuracy * 100).toFixed(1) + "%", lbl: "TEST ACCURACY" },
+      { num: (m.roc_auc * 100).toFixed(1) + "%",  lbl: "ROC-AUC SCORE" },
+      { num: (m.cv_mean * 100).toFixed(1) + "%",  lbl: "5-FOLD CV MEAN" },
+      { num: m.train_samples + m.test_samples,     lbl: "TOTAL SAMPLES" },
+    ];
+    grid.innerHTML = tiles.map(t =>
+      `<div class="metric-card"><div class="num">${t.num}</div><div class="lbl">${t.lbl}</div></div>`
+    ).join("");
+
+    // Confusion matrix
+    const cm = m.confusion_matrix;
+    document.getElementById("cm-grid").innerHTML = `
+      <div class="cm-cell tn"><div class="cm-num">${cm[0][0]}</div><div class="cm-lbl">TRUE NEG</div></div>
+      <div class="cm-cell fp"><div class="cm-num">${cm[0][1]}</div><div class="cm-lbl">FALSE POS</div></div>
+      <div class="cm-cell fn"><div class="cm-num">${cm[1][0]}</div><div class="cm-lbl">FALSE NEG</div></div>
+      <div class="cm-cell tp"><div class="cm-num">${cm[1][1]}</div><div class="cm-lbl">TRUE POS</div></div>
+    `;
+
+    // Per-class report
+    const r = m.report;
+    const classes = ["Not fractured", "Fractured"];
+    document.getElementById("class-report").innerHTML = classes.map(c => {
+      const d = r[c];
+      if (!d) return "";
+      return `
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px;color:var(--muted);letter-spacing:1px;margin-bottom:6px">${c.toUpperCase()}</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+            <div style="text-align:center"><div style="font-size:16px;font-family:var(--mono);color:var(--accent)">${(d.precision*100).toFixed(0)}%</div><div style="font-size:9px;color:var(--muted)">PRECISION</div></div>
+            <div style="text-align:center"><div style="font-size:16px;font-family:var(--mono);color:var(--accent)">${(d.recall*100).toFixed(0)}%</div><div style="font-size:9px;color:var(--muted)">RECALL</div></div>
+            <div style="text-align:center"><div style="font-size:16px;font-family:var(--mono);color:var(--accent)">${(d['f1-score']*100).toFixed(0)}%</div><div style="font-size:9px;color:var(--muted)">F1</div></div>
+          </div>
+        </div>
+      `;
+    }).join('<div style="height:1px;background:var(--border);margin:8px 0"></div>');
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>
