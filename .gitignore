@@ -1,4 +1,3 @@
-models/svm.pkl
 models/scaler.pkl
 files/__pycache__/
 files/.DS_Store
