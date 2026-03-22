@@ -1,19 +1,20 @@
 """
 app.py — Flask backend
-Serves the web UI and exposes prediction + metrics endpoints.
-
-Usage:
-    python app.py
-    Open http://localhost:5000
+Works locally and on Render (reads PORT from environment).
 """
 
-import os, json, base64, tempfile
+import os, json, base64, tempfile, sys
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from predict import predict
 
-UI_DIR      = os.path.join(os.path.dirname(__file__), "..", "ui")
-METRICS_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "metrics.json")
+BASE     = os.path.dirname(os.path.abspath(__file__))
+ROOT     = os.path.dirname(BASE)
+UI_DIR   = os.path.join(ROOT, "ui")
+MODELS_DIR = os.path.join(ROOT, "models")
+
+# Add src to path so imports work
+sys.path.insert(0, BASE)
+from predict import predict
 
 app = Flask(__name__, static_folder=UI_DIR, static_url_path="")
 CORS(app)
@@ -31,9 +32,10 @@ def health():
 
 @app.route("/metrics")
 def metrics():
-    if not os.path.exists(METRICS_PATH):
-        return jsonify({"error": "No metrics yet — run train_svm.py first."}), 404
-    with open(METRICS_PATH) as f:
+    path = os.path.join(MODELS_DIR, "metrics.json")
+    if not os.path.exists(path):
+        return jsonify({"error": "No metrics yet."}), 404
+    with open(path) as f:
         return jsonify(json.load(f))
 
 
@@ -53,7 +55,6 @@ def predict_endpoint():
                 t.write(base64.b64decode(data)); tmp = t.name
         else:
             return jsonify({"error": "Send a file or base64 image."}), 400
-
         return jsonify(predict(tmp))
     finally:
         if tmp and os.path.exists(tmp):
@@ -61,5 +62,6 @@ def predict_endpoint():
 
 
 if __name__ == "__main__":
-    print("BoneAI running → http://localhost:5000")
-    app.run(debug=False, host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"BoneAI running → http://localhost:{port}")
+    app.run(debug=False, host="0.0.0.0", port=port)

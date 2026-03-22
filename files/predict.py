@@ -1,6 +1,6 @@
 """
-predict.py
-Core prediction engine — used by app.py (web) and run_pipeline.py (CLI).
+predict.py - core prediction engine
+Paths are relative to this file's location so it works both locally and on Render.
 """
 
 import os, base64
@@ -11,19 +11,19 @@ from preprocessing import preprocess_stages
 from feature_extraction import extract_features
 from contour_analysis import draw_contour_overlay
 
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
+BASE     = os.path.dirname(os.path.abspath(__file__))
+ROOT     = os.path.dirname(BASE)
+MODEL_DIR = os.path.join(ROOT, "models")
 
-_model = _scaler = None
+_pipe = None
 
 def _load():
-    global _model, _scaler
-    if _model is None:
+    global _pipe
+    if _pipe is None:
         mp = os.path.join(MODEL_DIR, "svm.pkl")
-        sp = os.path.join(MODEL_DIR, "scaler.pkl")
         if not os.path.exists(mp):
             raise FileNotFoundError("Model not found — run train_svm.py first.")
-        _model  = joblib.load(mp)
-        _scaler = joblib.load(sp)
+        _pipe = joblib.load(mp)
 
 def _b64(arr):
     if arr.ndim == 2:
@@ -42,11 +42,9 @@ def predict(image_path: str) -> dict:
     if feat is None:
         return {"error": "Feature extraction failed."}
 
-    feat_s = _scaler.transform(feat.reshape(1, -1))
-    label  = int(_model.predict(feat_s)[0])
-    prob   = float(_model.predict_proba(feat_s)[0][label])
+    label  = int(_pipe.predict(feat.reshape(1, -1))[0])
+    prob   = float(_pipe.predict_proba(feat.reshape(1, -1))[0][label])
 
-    # Contour overlay — only when fractured
     if label == 1:
         overlay = draw_contour_overlay(stages["original"], stages["edges"])
     else:
