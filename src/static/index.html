@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fracture Analysis</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23000'/%3E%3Cpath d='M9 23 L14 9 L18 17 L23 13' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M9 23 L14 9 L18 17 L23 13"/></svg>
+      <span class="brand-name">Fracture Analysis</span>
+    </div>
+    <div class="status" id="status">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="status-text">Loading model…</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Upload -->
+    <section class="upload" id="upload-view">
+      <div class="upload-inner">
+        <h1>Analyse an X-ray</h1>
+        <p class="lede">Upload a musculoskeletal radiograph. The model checks it for fractures and shows where it looked.</p>
+
+        <label class="dropzone" id="dropzone" tabindex="0">
+          <input type="file" id="file-input" accept="image/*,.dcm,application/dicom" hidden>
+          <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <span class="drop-title">Drop an image here</span>
+          <span class="drop-sub">or <span class="link">choose a file</span> · you can also paste</span>
+          <span class="drop-meta">JPEG · PNG · DICOM — processed on this computer, never stored</span>
+        </label>
+
+        <div class="samples" id="samples" hidden>
+          <div class="samples-head">
+            <span>Or try a held-out test image</span>
+            <span class="muted">never seen during training</span>
+          </div>
+          <div class="sample-grid" id="sample-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Analysis -->
+    <section class="analysis" id="analysis-view" hidden>
+      <div class="viewer-col">
+        <div class="viewer" id="viewer">
+          <div class="stage" id="stage">
+            <img id="img-original" alt="Uploaded X-ray">
+            <img id="img-attention" class="layer" alt="">
+            <img id="img-input" class="layer" alt="Model input">
+            <div class="peak" id="peak" hidden></div>
+            <div class="scan" id="scan"></div>
+          </div>
+          <div class="viewer-empty" id="viewer-empty">
+            <div class="spinner"></div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="segmented" role="tablist" aria-label="View">
+            <button role="tab" data-view="image" aria-selected="true">Image</button>
+            <button role="tab" data-view="attention" aria-selected="false" disabled>Attention</button>
+            <button role="tab" data-view="input" aria-selected="false" disabled>Model input</button>
+          </div>
+          <span class="file-meta" id="file-meta"></span>
+        </div>
+      </div>
+
+      <aside class="panel">
+        <div class="panel-block">
+          <div class="eyebrow">Pipeline</div>
+          <ol class="steps" id="steps"></ol>
+        </div>
+
+        <div class="panel-block result" id="result" hidden>
+          <div class="eyebrow">Finding</div>
+          <div class="finding" id="finding"></div>
+          <p class="note" id="note"></p>
+
+          <div class="meter" aria-hidden="true">
+            <div class="meter-track">
+              <div class="meter-fill" id="meter-fill"></div>
+              <div class="meter-threshold" id="meter-threshold"><span>threshold</span></div>
+            </div>
+            <div class="meter-scale"><span>0</span><span>Fracture score</span><span>1</span></div>
+          </div>
+
+          <dl class="figures">
+            <div><dt>Score</dt><dd id="score"></dd></div>
+            <div><dt>Threshold</dt><dd id="threshold"></dd></div>
+            <div id="reference-row" hidden><dt>Reference label</dt><dd id="reference"></dd></div>
+          </dl>
+        </div>
+
+        <div class="panel-block about" id="about" hidden>
+          <div class="eyebrow">About the model</div>
+          <dl class="figures compact" id="model-figures"></dl>
+          <p class="fineprint">The threshold is set to catch about 85% of fractures, so some normal images are flagged.
+            The attention map shows the regions that drove the score; it is not a fracture outline.</p>
+        </div>
+
+        <div class="panel-actions">
+          <button class="btn-primary" id="new-analysis">New analysis</button>
+        </div>
+
+        <p class="disclaimer">Research prototype. Not a medical device and not for diagnostic use.</p>
+      </aside>
+    </section>
+
+    <div class="toast" id="toast" role="alert" hidden></div>
+  </main>
+
+  <div class="drag-overlay" id="drag-overlay" hidden><span>Drop to analyse</span></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

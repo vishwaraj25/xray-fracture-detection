@@ -45,6 +45,24 @@ PR-AUC by chance is about 0.18, the fracture rate. The full table, with precisio
 
 The data analysis, with figures, is in [reports/eda_summary.md](reports/eda_summary.md).
 
+## Web app
+
+A minimal black-and-white interface for analysing a single X-ray:
+
+```bash
+python src/app.py        # open http://127.0.0.1:8000
+```
+
+- Drop, choose or paste an image (JPEG, PNG or DICOM), or click one of the held-out test samples.
+- The pipeline steps (load → preprocess → inference → attention map → decision) animate as they finish, each with its real timing.
+- The result shows the finding, the score against the decision threshold, and the model's test-set sensitivity and specificity.
+- The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
+  224×224 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
+- For images without a suspected fracture, the attention map is faded and no peak is marked, so it does not suggest a finding.
+- Images are processed in memory on the local machine and never saved. Light and dark mode follow the system setting.
+
+Code: `src/app.py` (FastAPI server), `src/inference.py` (single-image analysis), `src/static/` (front end).
+
 ## Pipeline
 
 ```bash
@@ -60,6 +78,7 @@ python src/train_cnn.py           # fine-tune ResNet-18 (Apple MPS / CUDA / CPU)
 python src/evaluate.py            # compare all models -> reports/results.md + figures
 python src/explain.py             # Grad-CAM vs fracture boxes
 python src/predict.py path/to/xray.jpg [--model svm_rbf]
+python src/app.py                 # web app on http://127.0.0.1:8000
 
 pytest tests                      # unit tests
 ```
