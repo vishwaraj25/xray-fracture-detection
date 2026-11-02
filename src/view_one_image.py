@@ -7,8 +7,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 img_dir = os.path.join(
     BASE_DIR,
     "data",
-    "fracture_dataset",
-    "fractured"
+    "raw",
+    "FracAtlas",
+    "images",
+    "Fractured"
 )
 
 # list files in directory

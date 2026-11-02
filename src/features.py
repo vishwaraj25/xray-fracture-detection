@@ -1,35 +1,44 @@
+"""Hand-crafted image features for the classical (non-deep-learning) models."""
 import cv2
 import numpy as np
 from skimage.feature import hog, local_binary_pattern
 
-IMAGE_SIZE = (128, 128)
-LBP_POINTS = 8
-LBP_RADIUS = 1
+IMAGE_SIZE = 224
+LBP_SCALES = [(8, 1), (16, 2), (24, 3)]  # (points, radius)
+INTENSITY_BINS = 16
 
 
-def preprocess(image_path):
-    """Load an X-ray as grayscale, resize it and boost local contrast."""
+def load_square(image_path, size=IMAGE_SIZE):
+    """Load as grayscale and letterbox to a square so bones are not stretched."""
     gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if gray is None:
         raise ValueError(f"Could not read image at {image_path}")
 
-    gray = cv2.resize(gray, IMAGE_SIZE, interpolation=cv2.INTER_AREA)
+    h, w = gray.shape
+    scale = size / max(h, w)
+    gray = cv2.resize(gray, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+    canvas = np.zeros((size, size), dtype=np.uint8)
+    top, left = (size - gray.shape[0]) // 2, (size - gray.shape[1]) // 2
+    canvas[top:top + gray.shape[0], left:left + gray.shape[1]] = gray
+    return canvas
 
-    # CLAHE brings out bone edges better than global equalisation on X-rays
+
+def preprocess(image_path):
+    """Square grayscale image with CLAHE contrast enhancement, which suits X-rays."""
+    gray = load_square(image_path)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-
-    return cv2.GaussianBlur(gray, (3, 3), 0)
+    return clahe.apply(gray)
 
 
 def extract_features(image_path):
     """
-    Return a 1D feature vector combining HOG (shape) and a
-    uniform LBP histogram (texture), both computed on the grayscale image.
+    1D feature vector:
+      - HOG: bone outlines and edge orientations (shape)
+      - multi-scale uniform LBP histograms: fine and coarse texture
+      - intensity histogram and edge density: global appearance
     """
     gray = preprocess(image_path)
 
-    # ---- HOG FEATURES ----
     hog_features = hog(
         gray,
         orientations=9,
@@ -38,12 +47,17 @@ def extract_features(image_path):
         block_norm="L2-Hys",
     )
 
-    # ---- LBP FEATURES ----
-    # "uniform" LBP only produces values 0..P+1, so P+2 bins
-    lbp = local_binary_pattern(gray, P=LBP_POINTS, R=LBP_RADIUS, method="uniform")
-    n_bins = LBP_POINTS + 2
-    lbp_hist, _ = np.histogram(lbp.ravel(), bins=n_bins, range=(0, n_bins))
-    lbp_hist = lbp_hist.astype("float")
-    lbp_hist /= lbp_hist.sum() + 1e-6
+    lbp_histograms = []
+    for points, radius in LBP_SCALES:
+        lbp = local_binary_pattern(gray, P=points, R=radius, method="uniform")
+        # "uniform" LBP only produces values 0..P+1, so P+2 bins
+        hist, _ = np.histogram(lbp.ravel(), bins=points + 2, range=(0, points + 2))
+        lbp_histograms.append(hist / (hist.sum() + 1e-6))
 
-    return np.concatenate((hog_features, lbp_hist))
+    intensity, _ = np.histogram(gray, bins=INTENSITY_BINS, range=(0, 256))
+    intensity = intensity / intensity.sum()
+
+    edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
+    edge_density = np.array([edges.mean() / 255])
+
+    return np.concatenate([hog_features, *lbp_histograms, intensity, edge_density]).astype(np.float32)
