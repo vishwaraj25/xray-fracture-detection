@@ -1,43 +1,23 @@
-"""Hand-crafted image features for the classical (non-deep-learning) models."""
+"""Hand-crafted image features for the SVM."""
 import cv2
 import numpy as np
 from skimage.feature import hog, local_binary_pattern
 
-IMAGE_SIZE = 224
+from config import SVM_IMAGE_SIZE
+from preprocessing import enhance_contrast, load_square
+
 LBP_SCALES = [(8, 1), (16, 2), (24, 3)]  # (points, radius)
 INTENSITY_BINS = 16
 
 
-def load_square(image_path, size=IMAGE_SIZE):
-    """Load as grayscale and letterbox to a square so bones are not stretched."""
-    gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-    if gray is None:
-        raise ValueError(f"Could not read image at {image_path}")
-
-    h, w = gray.shape
-    scale = size / max(h, w)
-    gray = cv2.resize(gray, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
-    canvas = np.zeros((size, size), dtype=np.uint8)
-    top, left = (size - gray.shape[0]) // 2, (size - gray.shape[1]) // 2
-    canvas[top:top + gray.shape[0], left:left + gray.shape[1]] = gray
-    return canvas
-
-
-def preprocess(image_path):
-    """Square grayscale image with CLAHE contrast enhancement, which suits X-rays."""
-    gray = load_square(image_path)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    return clahe.apply(gray)
-
-
 def extract_features(image_path):
     """
-    1D feature vector:
+    1D feature vector for one image:
       - HOG: bone outlines and edge orientations (shape)
       - multi-scale uniform LBP histograms: fine and coarse texture
       - intensity histogram and edge density: global appearance
     """
-    gray = preprocess(image_path)
+    gray = enhance_contrast(load_square(image_path, SVM_IMAGE_SIZE))
 
     hog_features = hog(
         gray,

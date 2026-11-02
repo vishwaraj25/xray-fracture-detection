@@ -9,9 +9,9 @@ from PIL import Image
 SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC))
 
-from inference import decode_image, letterbox  # noqa: E402
+from preprocessing import decode_image, letterbox  # noqa: E402
 
-MODEL_READY = (SRC.parent / "models" / "cnn_resnet18.pt").exists()
+MODEL_READY = (SRC.parent / "models" / "cnn.pt").exists()
 
 
 def png_bytes(array):

@@ -9,8 +9,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from evaluate import sensitivity_lower_bound, threshold_for_sensitivity, threshold_metrics  # noqa: E402
-from features import IMAGE_SIZE, extract_features, load_square  # noqa: E402
-from prepare_data import assign_splits, body_region, duplicate_groups  # noqa: E402
+from build_dataset import assign_splits, body_region, duplicate_groups  # noqa: E402
+from feature_extraction import extract_features  # noqa: E402
+from preprocessing import load_square  # noqa: E402
+
+IMAGE_SIZE = 224
 
 
 @pytest.fixture
@@ -22,7 +25,7 @@ def tall_image(tmp_path):
 
 
 def test_load_square_letterboxes_without_stretching(tall_image):
-    square = load_square(tall_image)
+    square = load_square(tall_image, IMAGE_SIZE)
     assert square.shape == (IMAGE_SIZE, IMAGE_SIZE)
     # A 2:1 tall image fills the middle half of the width; the sides are padding
     assert square[:, :IMAGE_SIZE // 5].max() == 0

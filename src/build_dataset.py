@@ -1,5 +1,5 @@
 """
-Prepare the FracAtlas dataset for analysis and training.
+Build the dataset: turn the raw FracAtlas download into clean, split metadata.
 
 Steps:
   1. Read dataset.csv and attach image paths, body region and view.

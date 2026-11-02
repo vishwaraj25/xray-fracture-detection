@@ -12,7 +12,7 @@ curl -L -o FracAtlas.zip https://ndownloader.figshare.com/files/65518038
 unzip -q FracAtlas.zip && rm FracAtlas.zip
 ```
 
-Layout after extraction and `python src/prepare_data.py`:
+Layout after extraction and `python src/build_dataset.py`:
 
 - `raw/FracAtlas/`: the original dataset (images, `dataset.csv`, annotations)
 - `processed/images/`: grayscale copies downscaled to at most 384 px

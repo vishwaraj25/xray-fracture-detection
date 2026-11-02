@@ -1,7 +1,7 @@
 """
 Exploratory data analysis of FracAtlas.
 
-Run prepare_data.py first. Writes figures to reports/figures/ and a summary
+Run build_dataset.py first. Writes figures to reports/figures/ and a summary
 of the key numbers to reports/eda_summary.md.
 """
 import numpy as np

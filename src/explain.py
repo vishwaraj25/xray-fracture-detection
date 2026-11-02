@@ -1,14 +1,11 @@
 """
-Grad-CAM explanations for a trained CNN, checked against FracAtlas fracture boxes.
-
-  python src/explain.py                      # cnn_resnet18
-  python src/explain.py --run cnn_resnet18_384
+Grad-CAM explanations for the CNN, checked against the FracAtlas fracture boxes.
 
 Writes:
-  - reports/figures/gradcam_<run>.png: heatmaps with the radiologist's boxes
-  - reports/gradcam_<run>.md: a "pointing game" score. For fractured test images
-    the model flags, how often the hottest Grad-CAM pixel falls on an annotated
-    fracture box. High = the model looks at the fracture; low = it relies on something else.
+  - reports/figures/gradcam.png: heatmaps with the radiologists' boxes
+  - reports/gradcam.md: a "pointing game" score. For fractured test images the
+    CNN flags, how often the hottest Grad-CAM pixel falls on an annotated fracture
+    box. High = the model looks at the fracture; low = it relies on something else.
 """
 import argparse
 
@@ -17,30 +14,25 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from config import FIGURES_DIR, METADATA_PATH, PREDICTIONS_DIR, RAW_DIR, REPORTS_DIR
-from features import load_square
+from config import CNN_IMAGE_SIZE, FIGURES_DIR, METADATA_PATH, PREDICTIONS_DIR, RAW_DIR, REPORTS_DIR
+from evaluate import validation_threshold
 from plotting import FRACTURED, TEXT_MUTED, plt, save
+from preprocessing import load_square
+from train_cnn import LOAD_SIZE, eval_transform, get_device, image_path, load_model, to_tensor
 
-TARGET_LAYERS = {
-    "resnet18": lambda m: m.layer4,
-    "resnet50": lambda m: m.layer4,
-    "densenet121": lambda m: m.features,
-    "efficientnet_b0": lambda m: m.features,
-}
-
-# The last conv block of these networks has stride 32
+# ResNet's last conv block has stride 32, so each heatmap cell covers 32 px
 CAM_CELL = 32
-# Strict pointing-game tolerance, in pixels of a 224 px input (scaled for other sizes)
-STRICT_MARGIN_224 = 8
+# Strict pointing-game tolerance in pixels (8 px on a 224 px input, scaled up)
+STRICT_MARGIN = 8 * CNN_IMAGE_SIZE / 224
 
 
 class GradCAM:
-    def __init__(self, model, layer):
+    def __init__(self, model):
         self.model = model
         self.activations = None
         self.gradients = None
-        layer.register_forward_hook(self._save_activation)
-        layer.register_full_backward_hook(self._save_gradient)
+        model.layer4.register_forward_hook(self._save_activation)
+        model.layer4.register_full_backward_hook(self._save_gradient)
 
     def _save_activation(self, module, inputs, output):
         self.activations = output
@@ -60,16 +52,16 @@ class GradCAM:
         return cam / (cam.max() + 1e-8), torch.sigmoid(logit).item()
 
 
-def fracture_boxes(image_id, original_shape, square_size, input_size):
+def fracture_boxes(image_id, original_shape):
     """YOLO boxes (normalised to the original image) mapped into the square model input."""
     path = RAW_DIR / "Annotations" / "YOLO" / image_id.replace(".jpg", ".txt")
     if not path.exists():
         return []
     h, w = original_shape
-    scale = square_size / max(h, w)
+    scale = LOAD_SIZE / max(h, w)
     new_w, new_h = round(w * scale), round(h * scale)
-    left, top = (square_size - new_w) // 2, (square_size - new_h) // 2
-    to_input = input_size / square_size
+    left, top = (LOAD_SIZE - new_w) // 2, (LOAD_SIZE - new_h) // 2
+    to_input = CNN_IMAGE_SIZE / LOAD_SIZE
     boxes = []
     for line in path.read_text().split("\n"):
         if not line.strip():
@@ -89,36 +81,29 @@ def hit(cam, boxes, margin):
 
 
 def main():
-    from evaluate import threshold_for_sensitivity
-    from train_cnn import eval_transform, get_device, image_path, load_checkpoint, load_size, to_tensor
-
-    parser = argparse.ArgumentParser(description="Grad-CAM for a trained fracture CNN")
-    parser.add_argument("--run", default="cnn_resnet18", help="checkpoint name in models/")
+    parser = argparse.ArgumentParser(description="Grad-CAM for the fracture CNN")
     parser.add_argument("--examples", type=int, default=8)
     args = parser.parse_args()
 
     device = get_device()
-    model, arch, input_size = load_checkpoint(args.run, device)
-    square_size = load_size(input_size)
-    transform = eval_transform(input_size)
-    cam = GradCAM(model, TARGET_LAYERS[arch](model))
-    strict = STRICT_MARGIN_224 * input_size / 224
+    model = load_model(device)
+    transform = eval_transform()
+    cam = GradCAM(model)
 
     meta = pd.read_csv(METADATA_PATH).set_index("image_id")
-    preds = pd.read_csv(PREDICTIONS_DIR / f"{args.run}.csv")
-    val = preds[preds["split"] == "val"]
-    threshold = threshold_for_sensitivity(val["y_true"].to_numpy(), val["score"].to_numpy())
+    preds = pd.read_csv(PREDICTIONS_DIR / "cnn.csv")
+    threshold = validation_threshold(preds)
 
     flagged = preds[(preds["split"] == "test") & (preds["y_true"] == 1) & (preds["score"] >= threshold)]
     results = []
     for image_id in flagged["image_id"]:
         row = meta.loc[image_id]
-        gray = load_square(image_path({**row, "image_id": image_id}, square_size), square_size)
+        gray = load_square(image_path({**row, "image_id": image_id}), LOAD_SIZE)
         tensor = transform(to_tensor(gray)).to(device)
         heatmap, score = cam(tensor)
-        boxes = fracture_boxes(image_id, (row["orig_height"], row["orig_width"]), square_size, input_size)
+        boxes = fracture_boxes(image_id, (row["orig_height"], row["orig_width"]))
         if boxes:
-            results.append({"image_id": image_id, "score": score, "hit": hit(heatmap, boxes, strict),
+            results.append({"image_id": image_id, "score": score, "hit": hit(heatmap, boxes, STRICT_MARGIN),
                             "hit_cell": hit(heatmap, boxes, CAM_CELL),
                             "hardware": row["hardware"], "dup_group": row["dup_group"],
                             "heatmap": heatmap, "boxes": boxes,
@@ -130,7 +115,7 @@ def main():
         "no implant": table[table["hardware"] == 0],
         "metal implant": table[table["hardware"] == 1],
     }
-    lines = [f"| images | n | peak within {strict:.0f} px | peak within one CAM cell ({CAM_CELL} px) |",
+    lines = [f"| images | n | peak within {STRICT_MARGIN:.0f} px | peak within one CAM cell ({CAM_CELL} px) |",
              "|---|---|---|---|"]
     for label, part in summary.items():
         lines.append(f"| {label} | {len(part)} | {part['hit'].mean():.0%} | {part['hit_cell'].mean():.0%} |")
@@ -141,8 +126,7 @@ def main():
     hits_list = sorted([r for r in unique if r["hit_cell"]], key=lambda r: -r["score"])
     miss_list = sorted([r for r in unique if not r["hit_cell"]], key=lambda r: -r["score"])
     half = args.examples // 2
-    chosen = hits_list[:half] + miss_list[:args.examples - min(half, len(hits_list))]
-    chosen = chosen[:args.examples]
+    chosen = (hits_list[:half] + miss_list[:args.examples - min(half, len(hits_list))])[:args.examples]
     cols = 4
     rows = int(np.ceil(len(chosen) / cols))
     fig, axes = plt.subplots(rows, cols, figsize=(3 * cols, 3.2 * rows))
@@ -159,16 +143,15 @@ def main():
         ax.axis("off")
     fig.suptitle("Grad-CAM (heat) vs annotated fracture box (green)", x=0.02, ha="left",
                  fontsize=12, fontweight="semibold")
-    figure = f"gradcam_{args.run}.png"
-    save(fig, FIGURES_DIR / figure)
+    save(fig, FIGURES_DIR / "gradcam.png")
 
-    (REPORTS_DIR / f"gradcam_{args.run}.md").write_text(
-        f"# Grad-CAM: {args.run}\n\n"
-        "Pointing game on test fractures the model correctly flagged: how often the Grad-CAM peak "
+    (REPORTS_DIR / "gradcam.md").write_text(
+        "# Grad-CAM: where the CNN looks\n\n"
+        "Pointing game on test fractures the CNN correctly flagged: how often the Grad-CAM peak "
         f"lies on an annotated fracture box. The CAM grid is coarse ({CAM_CELL} px cells on a "
-        f"{input_size} px input), so both a strict and a one-cell tolerance are shown.\n\n"
+        f"{CNN_IMAGE_SIZE} px input), so both a strict and a one-cell tolerance are shown.\n\n"
         + "\n".join(lines) + "\n\n"
-        f"![Grad-CAM examples](figures/{figure})\n"
+        "![Grad-CAM examples](figures/gradcam.png)\n"
     )
 
 

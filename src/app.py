@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import BASE_DIR, IMAGES_DIR, METADATA_PATH, RAW_DIR
-from inference import FractureAnalyzer
+from predict import FractureAnalyzer
 
 STATIC_DIR = BASE_DIR / "src" / "static"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024

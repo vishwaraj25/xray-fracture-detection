@@ -1,66 +1,189 @@
 """
 Predict whether X-ray images show a fracture.
 
-Usage:
     python src/predict.py path/to/xray.jpg [more.jpg ...]
-    python src/predict.py --model svm_rbf path/to/xray.jpg
+    python src/predict.py --model svm path/to/xray.jpg
 
---model is "ensemble", a CNN run (cnn_resnet18, cnn_resnet18_384, ...) or a classical
-model (logistic_regression, svm_rbf, random_forest, gradient_boosting).
-The default is the model evaluate.py picked on the validation split.
-The decision threshold is the one chosen on the validation split.
+The CNN is the default; --model svm uses the baseline. The decision threshold
+is the one chosen on the validation split (see evaluate.py).
+
+FractureAnalyzer is also what the web app uses. Its analyze() runs the same steps
+as training and evaluation and returns every intermediate result for the UI:
+  1. decode     - read JPEG/PNG/DICOM, convert to grayscale
+  2. preprocess - letterbox to a square at the CNN's input size
+  3. classify   - CNN score, averaged with a horizontally flipped copy
+  4. explain    - Grad-CAM heatmap mapped back onto the original image
+  5. decide     - compare the score with the validation-chosen threshold
 """
 import argparse
+import base64
+import io
+import threading
+import time
 from pathlib import Path
 
-import joblib
+import cv2
+import numpy as np
 import pandas as pd
+import torch
+from PIL import Image
+from sklearn.metrics import roc_auc_score
 
-from config import MODELS_DIR, PREDICTIONS_DIR
-from evaluate import threshold_for_sensitivity
-from features import extract_features
+from config import CNN_IMAGE_SIZE, PREDICTIONS_DIR, SVM_PATH, TARGET_SENSITIVITY
+from evaluate import MODELS, threshold_metrics, validation_threshold
+from explain import CAM_CELL, GradCAM
+from preprocessing import decode_image, letterbox
+from train_cnn import LOAD_SIZE, eval_transform, get_device, load_model, to_tensor
 
-
-def validation_threshold(name):
-    preds = pd.read_csv(PREDICTIONS_DIR / f"{name}.csv")
-    val = preds[preds["split"] == "val"]
-    return threshold_for_sensitivity(val["y_true"].to_numpy(), val["score"].to_numpy())
-
-
-def classical_scorer(name):
-    model = joblib.load(MODELS_DIR / f"{name}.joblib")
-
-    def score(path):
-        features = extract_features(path).reshape(1, -1)
-        if hasattr(model, "predict_proba"):
-            return model.predict_proba(features)[0, 1]
-        return model.decision_function(features)[0]
-
-    return score
+DISPLAY_MAX = 1024
 
 
-def cnn_scorer(name):
-    from inference import FractureAnalyzer
+def png_base64(array):
+    buffer = io.BytesIO()
+    Image.fromarray(array).save(buffer, format="PNG", optimize=True)
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
 
-    analyzer = FractureAnalyzer(name)
-    return lambda path: analyzer.score(Path(path).read_bytes())
+
+def jpeg_base64(array):
+    buffer = io.BytesIO()
+    Image.fromarray(array).save(buffer, format="JPEG", quality=90)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
+
+
+def confidence_note(score, threshold):
+    """Plain-language distance from the decision boundary."""
+    if abs(score - threshold) < 0.1:
+        return "Borderline: close to the decision threshold. Review carefully."
+    if score >= threshold:
+        return "Well above the threshold." if score > 0.8 else "Above the threshold."
+    return "Well below the threshold." if score < threshold / 3 else "Below the threshold."
+
+
+class FractureAnalyzer:
+    """The trained CNN with its Grad-CAM hook and validation-chosen threshold."""
+
+    def __init__(self):
+        self.device = get_device()
+        self.model = load_model(self.device)
+        self.transform = eval_transform()
+        self.cam = GradCAM(self.model)
+        # Grad-CAM keeps per-call state on the hooks, so one analysis at a time
+        self.lock = threading.Lock()
+        self.info = self._model_info()
+
+    def _model_info(self):
+        preds = pd.read_csv(PREDICTIONS_DIR / "cnn.csv")
+        test = preds[preds["split"] == "test"]
+        threshold = validation_threshold(preds)
+        m = threshold_metrics(test["y_true"].to_numpy(), test["score"].to_numpy(), threshold)
+        return {
+            "model": MODELS["cnn"][0].removeprefix("CNN: "),
+            "dataset": "FracAtlas",
+            "threshold": float(threshold),
+            "target_sensitivity": TARGET_SENSITIVITY,
+            "test": {
+                "images": int(len(test)),
+                "roc_auc": float(roc_auc_score(test["y_true"], test["score"])),
+                "sensitivity": float(m["sensitivity"]),
+                "specificity": float(m["specificity"]),
+            },
+            "device": str(self.device),
+        }
+
+    def score(self, data):
+        """Probability only, for command-line use."""
+        return self.analyze(data)["score"]
+
+    def analyze(self, data):
+        steps = []
+
+        def step(key, label, start, detail):
+            steps.append({"key": key, "label": label, "ms": round((time.perf_counter() - start) * 1000),
+                          "detail": detail})
+
+        t = time.perf_counter()
+        gray, fmt = decode_image(data)
+        h, w = gray.shape
+        step("decode", "Image loaded", t, f"{fmt} · {w}×{h} px")
+
+        t = time.perf_counter()
+        square, (top, left, new_h, new_w) = letterbox(gray, LOAD_SIZE)
+        tensor = self.transform(to_tensor(square)).to(self.device)
+        model_input = cv2.resize(square, (CNN_IMAGE_SIZE, CNN_IMAGE_SIZE), interpolation=cv2.INTER_AREA)
+        step("preprocess", "Preprocessed", t, f"padded to square · {CNN_IMAGE_SIZE}×{CNN_IMAGE_SIZE} input")
+
+        t = time.perf_counter()
+        with self.lock:
+            with torch.no_grad():
+                flipped = torch.sigmoid(self.model(torch.flip(tensor, dims=[2]).unsqueeze(0))).item()
+            heatmap, original = self.cam(tensor)
+        score = (original + flipped) / 2
+        step("classify", "Model inference", t, "ResNet-18 · flip-averaged")
+
+        t = time.perf_counter()
+        display_scale = min(1.0, DISPLAY_MAX / max(h, w))
+        dw, dh = round(w * display_scale), round(h * display_scale)
+        display = cv2.resize(gray, (dw, dh), interpolation=cv2.INTER_AREA)
+        # Crop the padding off the heatmap and stretch it onto the displayed image
+        scale = CNN_IMAGE_SIZE / LOAD_SIZE
+        crop = heatmap[round(top * scale):round((top + new_h) * scale),
+                       round(left * scale):round((left + new_w) * scale)]
+        cam = np.clip(cv2.resize(crop, (dw, dh), interpolation=cv2.INTER_CUBIC), 0, 1)
+        cam = cam / (cam.max() + 1e-8)
+        peak_y, peak_x = np.unravel_index(cam.argmax(), cam.shape)
+        # Grad-CAM is normalised per image, so on a negative image it would still look
+        # "hot". Fade it by how close the score is to the threshold to avoid implying a finding.
+        threshold = self.info["threshold"]
+        positive = score >= threshold
+        strength = 1.0 if positive else 0.25 + 0.5 * score / threshold
+        # White-on-transparent overlay keeps the UI monochrome
+        overlay = np.zeros((dh, dw, 4), dtype=np.uint8)
+        overlay[..., :3] = 255
+        overlay[..., 3] = (np.clip((cam - 0.35) / 0.65, 0, 1) ** 1.5 * 200 * strength).astype(np.uint8)
+        step("explain", "Attention map", t, f"Grad-CAM · {CAM_CELL} px resolution")
+
+        t = time.perf_counter()
+        step("decide", "Decision", t, f"threshold {threshold:.2f}")
+
+        return {
+            "score": float(score),
+            "threshold": threshold,
+            "positive": bool(positive),
+            "finding": "Fracture suspected" if positive else "No fracture detected",
+            "confidence_note": confidence_note(score, threshold),
+            "peak": {"x": float(peak_x / dw), "y": float(peak_y / dh)},
+            "images": {
+                "original": jpeg_base64(display),
+                "model_input": png_base64(model_input),
+                "attention": png_base64(overlay),
+            },
+            "size": {"width": int(w), "height": int(h)},
+            "steps": steps,
+        }
+
+
+def svm_scorer():
+    import joblib
+
+    from feature_extraction import extract_features
+
+    model = joblib.load(SVM_PATH)
+    return lambda path: model.decision_function(extract_features(path).reshape(1, -1))[0]
 
 
 def main():
-    from inference import default_model_name
-
     parser = argparse.ArgumentParser(description="Predict fractures in X-ray images")
     parser.add_argument("images", nargs="+", help="X-ray image file(s)")
-    parser.add_argument("--model", default=None, help="model name (default: best on validation)")
+    parser.add_argument("--model", choices=["cnn", "svm"], default="cnn")
     args = parser.parse_args()
 
-    name = args.model or default_model_name()
-    if not name.startswith("cnn_") and name != "ensemble" and (MODELS_DIR / f"cnn_{name}.pt").exists():
-        name = f"cnn_{name}"  # allow "--model resnet18"
-    is_cnn = name == "ensemble" or (MODELS_DIR / f"{name}.pt").exists()
-    score = cnn_scorer(name) if is_cnn else classical_scorer(name)
-    threshold = validation_threshold(name)
-    print(f"Model: {name} (threshold {threshold:.3f})")
+    if args.model == "cnn":
+        analyzer = FractureAnalyzer()
+        score = lambda path: analyzer.score(Path(path).read_bytes())  # noqa: E731
+    else:
+        score = svm_scorer()
+    threshold = validation_threshold(pd.read_csv(PREDICTIONS_DIR / f"{args.model}.csv"))
+    print(f"Model: {MODELS[args.model][0]} (threshold {threshold:.3f})")
 
     for image_path in args.images:
         try:
