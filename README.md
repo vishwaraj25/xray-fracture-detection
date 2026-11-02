@@ -11,19 +11,20 @@ against a "shortcut" baseline that never looks at the pixels.
 ## Results
 
 All numbers are on a held-out test split of 627 images (111 fractured). The model never sees these images during training or tuning.
-The decision threshold is fixed on the validation split to catch 85% of fractures.
+The decision threshold is fixed on the validation split: the highest threshold at which we can be 95% confident
+(one-sided Clopper–Pearson bound) that at least 85% of fractures are caught. See [Operating point](#operating-point).
 
 | Model | ROC-AUC [95% CI] | PR-AUC [95% CI] | Sensitivity | Specificity |
 |---|---|---|---|---|
 | Metadata only: region, view, implant (no pixels) | 0.781 [0.73–0.83] | 0.508 [0.43–0.59] | 0.94 | 0.17 |
-| Logistic regression (HOG + LBP) | 0.689 [0.63–0.74] | 0.316 [0.25–0.41] | 0.71 | 0.58 |
-| SVM, RBF kernel (HOG + LBP) | 0.768 [0.72–0.82] | 0.442 [0.36–0.55] | 0.75 | 0.65 |
-| Random forest (HOG + LBP) | 0.774 [0.72–0.82] | 0.443 [0.36–0.54] | 0.74 | 0.64 |
-| Gradient boosting (HOG + LBP) | 0.764 [0.71–0.81] | 0.433 [0.34–0.53] | 0.77 | 0.61 |
-| CNN: ResNet-18, 224 px | 0.865 [0.82–0.90] | 0.726 [0.65–0.80] | 0.82 | 0.77 |
-| CNN: DenseNet-121, 224 px | 0.858 [0.82–0.90] | 0.691 [0.61–0.76] | 0.75 | 0.83 |
-| CNN: ResNet-18, 384 px | 0.868 [0.82–0.91] | 0.757 [0.68–0.82] | 0.76 | 0.83 |
-| **Ensemble: ResNet-18 at 224 + 384 px** | **0.892 [0.85–0.93]** | **0.777 [0.71–0.84]** | **0.76** | **0.86** |
+| Logistic regression (HOG + LBP) | 0.689 [0.63–0.74] | 0.316 [0.25–0.41] | 0.78 | 0.49 |
+| SVM, RBF kernel (HOG + LBP) | 0.768 [0.72–0.82] | 0.442 [0.36–0.55] | 0.79 | 0.62 |
+| Random forest (HOG + LBP) | 0.774 [0.72–0.82] | 0.443 [0.36–0.54] | 0.80 | 0.60 |
+| Gradient boosting (HOG + LBP) | 0.764 [0.71–0.81] | 0.433 [0.34–0.53] | 0.81 | 0.54 |
+| CNN: ResNet-18, 224 px | 0.865 [0.82–0.90] | 0.726 [0.65–0.80] | 0.83 | 0.68 |
+| CNN: DenseNet-121, 224 px | 0.858 [0.82–0.90] | 0.691 [0.61–0.76] | 0.86 | 0.65 |
+| CNN: ResNet-18, 384 px | 0.868 [0.82–0.91] | 0.757 [0.68–0.82] | 0.77 | 0.80 |
+| **Ensemble: ResNet-18 at 224 + 384 px** | **0.892 [0.85–0.93]** | **0.777 [0.71–0.84]** | **0.86** | **0.78** |
 
 PR-AUC by chance is about 0.18, the fracture rate. The ensemble members are chosen by validation PR-AUC
 (`src/ensemble.py`), and the app's default model is the best on validation, so the test split plays no part in either choice. The full table, with precision, F1 and a column without implant images, is in [reports/results.md](reports/results.md).
@@ -34,24 +35,37 @@ PR-AUC by chance is about 0.18, the fracture rate. The ensemble members are chos
 
 1. **CNNs are clearly the best models, and resolution matters more than depth.** Moving ResNet-18 from 224 to 384 px
    raised validation PR-AUC from 0.74 to 0.80; the deeper DenseNet-121 at 224 px did not help (0.73). Averaging the
-   224 and 384 px ResNets gives the best test results: 84 of 111 fractures caught with 71 false alarms out of 516 normal
-   images, versus 91 caught with 118 false alarms for the single 224 px model. Compared with the best classical model,
-   PR-AUC rises from 0.44 to 0.78.
-   The threshold aimed at 85% sensitivity on validation lands at 76% on test, so the operating point shifts between splits;
-   the confidence intervals show the test set (111 fractures) is small.
+   224 and 384 px ResNets gives the best test results: 96 of 111 fractures caught with 114 false alarms out of 516 normal
+   images, versus 92 caught with 163 false alarms for the single 224 px model at the same rule. Compared with the best
+   classical model, PR-AUC rises from 0.44 to 0.78.
 2. **The dataset contains shortcuts.** 98% of images showing metal implants are fractured, and the fracture rate ranges
    from 6% (hip) to 30% (hand). A model that only sees region, view and implant flags reaches **0.78 ROC-AUC**, which is
    as good as every hand-crafted-feature model. The classical models therefore learn little beyond these shortcuts.
    The ensemble still scores 0.88 ROC-AUC with implant images removed, so it does more than spot metal.
 3. **Higher resolution also makes the model look at the fracture more often.** The Grad-CAM peak lands within one heatmap
-   cell of the radiologist's box in 69% of correctly flagged fractures at 384 px, against 62% at 224 px; within a strict
-   margin, 52% against 25%. In the rest it still focuses on soft tissue, the chest or film edges
+   cell of the radiologist's box in 69% of correctly flagged fractures at 384 px, against 61% at 224 px; within a strict
+   margin, 53% against 25%. In the rest it still focuses on soft tissue, the chest or film edges
    ([384 px](reports/gradcam_cnn_resnet18_384.md), [224 px](reports/gradcam_cnn_resnet18.md)).
 4. **Evaluation pitfalls matter.** The earlier version of this project used 6 X-rays augmented by rotation, which gave
    99% accuracy with a random split and 7% on unseen X-rays. FracAtlas has no patient IDs, so near-duplicate
    images (206 groups) are detected with perceptual hashing and each group is kept inside a single split.
 
 ![Grad-CAM](reports/figures/gradcam_cnn_resnet18_384.png)
+
+### Operating point
+
+Setting the threshold to give exactly 85% sensitivity on validation gave only 76% on test for the ensemble, and every
+model, classical ones included, landed 4–10 points short. Two reasons:
+
+- **Validation has only 113 fractures, so the threshold is noisy.** Re-estimating it on bootstrap resamples of the
+  validation split moves the ensemble's test sensitivity anywhere from 69% to 85% (90% interval).
+- **The test split has harder cases.** It has 9 hip and shoulder fractures where validation has 1, and its leg and
+  mixed-region fractures were caught less often.
+
+The threshold is now the highest one whose 95% lower confidence bound on validation sensitivity is still at least 85%.
+On validation this requires catching 103 of 113 fractures (91%) rather than 96. On test the ensemble now catches 86% of
+fractures at 78% specificity. The rule was fixed before looking at the test results. The single 384 px model still
+reaches only 77%: its validation scores look more confident than its test scores, one reason the ensemble is preferred.
 
 The data analysis, with figures, is in [reports/eda_summary.md](reports/eda_summary.md).
 

@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from evaluate import threshold_for_sensitivity, threshold_metrics  # noqa: E402
+from evaluate import sensitivity_lower_bound, threshold_for_sensitivity, threshold_metrics  # noqa: E402
 from features import IMAGE_SIZE, extract_features, load_square  # noqa: E402
 from prepare_data import assign_splits, body_region, duplicate_groups  # noqa: E402
 
@@ -69,7 +69,19 @@ def test_splits_keep_duplicate_groups_together():
 def test_threshold_reaches_target_sensitivity():
     y = np.array([0, 0, 0, 1, 1, 1, 1])
     scores = np.array([0.1, 0.5, 0.7, 0.2, 0.6, 0.8, 0.9])
-    threshold = threshold_for_sensitivity(y, scores, target=0.75)
+    threshold = threshold_for_sensitivity(y, scores, target=0.75, confidence=None)
     metrics = threshold_metrics(y, scores, threshold)
     assert metrics["sensitivity"] >= 0.75
     assert metrics["tp"] + metrics["fn"] == 4
+
+
+def test_confident_threshold_is_more_conservative():
+    rng = np.random.default_rng(0)
+    y = np.r_[np.zeros(500), np.ones(110)].astype(int)
+    scores = np.r_[rng.normal(0, 1, 500), rng.normal(1.5, 1, 110)]
+    point = threshold_for_sensitivity(y, scores, target=0.85, confidence=None)
+    confident = threshold_for_sensitivity(y, scores, target=0.85, confidence=0.95)
+    assert confident < point
+    caught = (scores[y == 1] >= confident).sum()
+    assert sensitivity_lower_bound(caught, 110, 0.95) >= 0.85
+    assert sensitivity_lower_bound(caught - 1, 110, 0.95) < 0.85

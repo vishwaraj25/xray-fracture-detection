@@ -4,8 +4,8 @@ Pointing game on test fractures the model correctly flagged: how often the Grad-
 
 | images | n | peak within 8 px | peak within one CAM cell (32 px) |
 |---|---|---|---|
-| all | 91 | 25% | 62% |
-| no implant | 76 | 26% | 59% |
+| all | 92 | 25% | 61% |
+| no implant | 77 | 26% | 58% |
 | metal implant | 15 | 20% | 73% |
 
 ![Grad-CAM examples](figures/gradcam_cnn_resnet18.png)
