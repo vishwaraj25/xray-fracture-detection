@@ -357,9 +357,11 @@ h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.025em; font-weight: 
 
 /* ---------- Small screens ---------- */
 @media (max-width: 860px) {
-  .analysis { grid-template-columns: 1fr; overflow-y: auto; }
-  .viewer-col { padding: 16px; }
-  .viewer { min-height: 56vh; }
+  .analysis { grid-template-columns: 1fr; overflow-y: auto; align-content: start; }
+  /* Stacked rows must size to their content, or the viewer spills over the panel */
+  .viewer-col { padding: 16px; min-height: auto; }
+  .viewer { flex: none; min-height: 56vh; }
+  .panel { overflow: visible; }
   .stage img { max-height: 56vh; }
   .panel { border-left: 0; border-top: 1px solid var(--line); padding: 20px 16px 28px; }
   .topbar { padding: 0 16px; }
