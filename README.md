@@ -2,7 +2,7 @@
 
 Detecting bone fractures in musculoskeletal X-rays. The project compares a
 classical pipeline (hand-crafted HOG/LBP features with SVM, random forest and
-other models) against a fine-tuned convolutional neural network. Both are checked
+other models) against fine-tuned convolutional neural networks and an ensemble of them. Both are checked
 against a "shortcut" baseline that never looks at the pixels.
 
 **Dataset:** [FracAtlas](https://doi.org/10.6084/m9.figshare.22363012) (Abedeen et al., *Scientific Data*, 2023):
@@ -20,28 +20,38 @@ The decision threshold is fixed on the validation split to catch 85% of fracture
 | SVM, RBF kernel (HOG + LBP) | 0.768 [0.72–0.82] | 0.442 [0.36–0.55] | 0.75 | 0.65 |
 | Random forest (HOG + LBP) | 0.774 [0.72–0.82] | 0.443 [0.36–0.54] | 0.74 | 0.64 |
 | Gradient boosting (HOG + LBP) | 0.764 [0.71–0.81] | 0.433 [0.34–0.53] | 0.77 | 0.61 |
-| **CNN: ResNet-18, fine-tuned** | **0.865 [0.82–0.90]** | **0.726 [0.65–0.80]** | **0.82** | **0.77** |
+| CNN: ResNet-18, 224 px | 0.865 [0.82–0.90] | 0.726 [0.65–0.80] | 0.82 | 0.77 |
+| CNN: DenseNet-121, 224 px | 0.858 [0.82–0.90] | 0.691 [0.61–0.76] | 0.75 | 0.83 |
+| CNN: ResNet-18, 384 px | 0.868 [0.82–0.91] | 0.757 [0.68–0.82] | 0.76 | 0.83 |
+| **Ensemble: ResNet-18 at 224 + 384 px** | **0.892 [0.85–0.93]** | **0.777 [0.71–0.84]** | **0.76** | **0.86** |
 
-PR-AUC by chance is about 0.18, the fracture rate. The full table, with precision, F1 and a column without implant images, is in [reports/results.md](reports/results.md).
+PR-AUC by chance is about 0.18, the fracture rate. The ensemble members are chosen by validation PR-AUC
+(`src/ensemble.py`), and the app's default model is the best on validation, so the test split plays no part in either choice. The full table, with precision, F1 and a column without implant images, is in [reports/results.md](reports/results.md).
 
 ![ROC and PR curves](reports/figures/results_curves.png)
 
 ### Key findings
 
-1. **The CNN is clearly the best model.** It catches 91 of 111 test fractures with 118 false alarms out of 516 normal images.
-   Compared with the best classical model, PR-AUC rises from 0.44 to 0.73.
+1. **CNNs are clearly the best models, and resolution matters more than depth.** Moving ResNet-18 from 224 to 384 px
+   raised validation PR-AUC from 0.74 to 0.80; the deeper DenseNet-121 at 224 px did not help (0.73). Averaging the
+   224 and 384 px ResNets gives the best test results: 84 of 111 fractures caught with 71 false alarms out of 516 normal
+   images, versus 91 caught with 118 false alarms for the single 224 px model. Compared with the best classical model,
+   PR-AUC rises from 0.44 to 0.78.
+   The threshold aimed at 85% sensitivity on validation lands at 76% on test, so the operating point shifts between splits;
+   the confidence intervals show the test set (111 fractures) is small.
 2. **The dataset contains shortcuts.** 98% of images showing metal implants are fractured, and the fracture rate ranges
    from 6% (hip) to 30% (hand). A model that only sees region, view and implant flags reaches **0.78 ROC-AUC**, which is
    as good as every hand-crafted-feature model. The classical models therefore learn little beyond these shortcuts.
-   The CNN still scores 0.85 with implant images removed, so it does more than spot metal.
-3. **The CNN does not always look at the fracture.** Grad-CAM peaks fall within one heatmap cell of the
-   radiologist's box in 62% of correctly flagged fractures. In the rest it focuses on soft tissue, the chest
-   or film edges ([reports/gradcam_resnet18.md](reports/gradcam_resnet18.md)).
+   The ensemble still scores 0.88 ROC-AUC with implant images removed, so it does more than spot metal.
+3. **Higher resolution also makes the model look at the fracture more often.** The Grad-CAM peak lands within one heatmap
+   cell of the radiologist's box in 69% of correctly flagged fractures at 384 px, against 62% at 224 px; within a strict
+   margin, 52% against 25%. In the rest it still focuses on soft tissue, the chest or film edges
+   ([384 px](reports/gradcam_cnn_resnet18_384.md), [224 px](reports/gradcam_cnn_resnet18.md)).
 4. **Evaluation pitfalls matter.** The earlier version of this project used 6 X-rays augmented by rotation, which gave
    99% accuracy with a random split and 7% on unseen X-rays. FracAtlas has no patient IDs, so near-duplicate
    images (206 groups) are detected with perceptual hashing and each group is kept inside a single split.
 
-![Grad-CAM](reports/figures/gradcam_examples.png)
+![Grad-CAM](reports/figures/gradcam_cnn_resnet18_384.png)
 
 The data analysis, with figures, is in [reports/eda_summary.md](reports/eda_summary.md).
 
@@ -55,9 +65,10 @@ python src/app.py        # open http://127.0.0.1:8000
 
 - Drop, choose or paste an image (JPEG, PNG or DICOM), or click one of the held-out test samples.
 - The pipeline steps (load → preprocess → inference → attention map → decision) animate as they finish, each with its real timing.
-- The result shows the finding, the score against the decision threshold, and the model's test-set sensitivity and specificity.
+- The result shows the finding, the score against the decision threshold, how many ensemble members flag it,
+  and the model's test-set sensitivity and specificity. The attention map is the average of the members' Grad-CAMs.
 - The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
-  224×224 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
+  input the largest network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
 - For images without a suspected fracture, the attention map is faded and no peak is marked, so it does not suggest a finding.
 - Images are processed in memory on the local machine and never saved. Light and dark mode follow the system setting.
 
@@ -74,10 +85,13 @@ python src/prepare_data.py        # cache images, detect near-duplicates, make s
 python src/eda.py                 # data analysis -> reports/eda_summary.md + figures
 python src/train_baseline.py      # metadata-only shortcut baseline
 python src/train_classical.py     # HOG+LBP features, 4 models, grouped CV tuning          (~7 min)
-python src/train_cnn.py           # fine-tune ResNet-18 (Apple MPS / CUDA / CPU)           (~30 min on M2)
+python src/train_cnn.py           # fine-tune ResNet-18 at 224 px (Apple MPS / CUDA / CPU) (~30 min on M2)
+python src/train_cnn.py --size 384                 # same at 384 px                       (~80 min on M2)
+python src/train_cnn.py --arch densenet121         # optional, did not help               (~60 min on M2)
+python src/ensemble.py            # pick the CNN combination with the best validation PR-AUC
 python src/evaluate.py            # compare all models -> reports/results.md + figures
-python src/explain.py             # Grad-CAM vs fracture boxes
-python src/predict.py path/to/xray.jpg [--model svm_rbf]
+python src/explain.py --run cnn_resnet18_384   # Grad-CAM vs fracture boxes
+python src/predict.py path/to/xray.jpg [--model svm_rbf]   # default: best model on validation
 python src/app.py                 # web app on http://127.0.0.1:8000
 
 pytest tests                      # unit tests
@@ -88,7 +102,8 @@ pytest tests                      # unit tests
 | `prepare_data.py` | Downscales the images, derives body region and view, flags 2 label conflicts, groups near-duplicates with a perceptual hash, and makes a 70/15/15 split stratified by label and region and grouped by duplicate cluster |
 | `features.py` | Pads each image to a square without distorting it, applies CLAHE contrast enhancement, then extracts HOG, 3-scale uniform LBP, an intensity histogram and edge density (6,155 features) |
 | `train_classical.py` | Scaler → PCA → {logistic regression, RBF SVM, random forest, gradient boosting}, tuned with 5-fold `StratifiedGroupKFold` on PR-AUC |
-| `train_cnn.py` | ImageNet ResNet-18 (also supports ResNet-50, DenseNet-121, EfficientNet-B0), augmentation, class-weighted loss, one-cycle learning rate, early stopping on validation PR-AUC, flip test-time augmentation |
+| `train_cnn.py` | ImageNet ResNet-18 (also supports ResNet-50, DenseNet-121, EfficientNet-B0) at any input size (`--size`), augmentation, class-weighted loss, one-cycle learning rate, early stopping on validation PR-AUC, flip test-time augmentation |
+| `ensemble.py` | Averages CNN scores, trying every combination of trained runs and keeping the best on validation PR-AUC |
 | `evaluate.py` | ROC-AUC and PR-AUC with bootstrap confidence intervals, a threshold chosen on validation, a confusion matrix, per-region results, and a subgroup without implants |
 | `explain.py` | Grad-CAM, plus a "pointing game" score against the FracAtlas fracture boxes |
 

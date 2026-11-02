@@ -92,6 +92,7 @@
           <dl class="figures">
             <div><dt>Score</dt><dd id="score"></dd></div>
             <div><dt>Threshold</dt><dd id="threshold"></dd></div>
+            <div id="agreement-row" hidden><dt>Models flagging</dt><dd id="agreement"></dd></div>
             <div id="reference-row" hidden><dt>Reference label</dt><dd id="reference"></dd></div>
           </dl>
         </div>
@@ -99,7 +100,7 @@
         <div class="panel-block about" id="about" hidden>
           <div class="eyebrow">About the model</div>
           <dl class="figures compact" id="model-figures"></dl>
-          <p class="fineprint">The threshold is set to catch about 85% of fractures, so some normal images are flagged.
+          <p class="fineprint">The threshold was tuned to catch 85% of fractures on validation images, so some normal images are flagged.
             The attention map shows the regions that drove the score; it is not a fracture outline.</p>
         </div>
 

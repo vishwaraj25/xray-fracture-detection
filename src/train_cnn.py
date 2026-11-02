@@ -4,9 +4,11 @@ Fine-tune an ImageNet-pretrained CNN (transfer learning) to detect fractures.
 Run prepare_data.py first. Uses Apple Silicon GPU (MPS) or CUDA when available.
 
   python src/train_cnn.py --arch resnet18 --epochs 25
+  python src/train_cnn.py --arch resnet18 --size 384      # higher resolution
 
-The best epoch (by validation PR-AUC) is saved to models/cnn_<arch>.pt and its
-validation/test scores to reports/predictions/cnn_<arch>.csv for evaluate.py.
+The best epoch (by validation PR-AUC) is saved to models/<run>.pt and its
+validation/test scores to reports/predictions/<run>.csv for evaluate.py, where
+<run> is cnn_<arch> at 224 px and cnn_<arch>_<size> otherwise.
 """
 import argparse
 import json
@@ -22,11 +24,10 @@ from torchvision.transforms import v2
 from sklearn.metrics import average_precision_score, roc_auc_score
 from tqdm import tqdm
 
-from config import IMAGES_DIR, METADATA_PATH, MODELS_DIR, PREDICTIONS_DIR, SEED
+from config import CACHE_SIZE, IMAGES_DIR, METADATA_PATH, MODELS_DIR, PREDICTIONS_DIR, RAW_DIR, SEED
 from features import load_square
 
-LOAD_SIZE = 256
-INPUT_SIZE = 224
+DEFAULT_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
@@ -36,6 +37,15 @@ ARCHITECTURES = {
     "densenet121": (models.densenet121, models.DenseNet121_Weights.DEFAULT, "classifier"),
     "efficientnet_b0": (models.efficientnet_b0, models.EfficientNet_B0_Weights.DEFAULT, "classifier"),
 }
+
+
+def run_name(arch, size):
+    return f"cnn_{arch}" if size == DEFAULT_SIZE else f"cnn_{arch}_{size}"
+
+
+def load_size(input_size):
+    """Images are letterboxed slightly larger than the input so random crops have room."""
+    return round(input_size * 8 / 7)
 
 
 def get_device():
@@ -62,20 +72,23 @@ def build_model(arch, pretrained=True):
     return model
 
 
-TRAIN_TRANSFORM = v2.Compose([
-    v2.RandomResizedCrop(INPUT_SIZE, scale=(0.7, 1.0), ratio=(0.85, 1.15), antialias=True),
-    v2.RandomHorizontalFlip(),
-    v2.RandomAffine(degrees=10, translate=(0.05, 0.05)),
-    v2.ColorJitter(brightness=0.2, contrast=0.2),
-    v2.ToDtype(torch.float32, scale=True),
-    v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-])
+def train_transform(input_size):
+    return v2.Compose([
+        v2.RandomResizedCrop(input_size, scale=(0.7, 1.0), ratio=(0.85, 1.15), antialias=True),
+        v2.RandomHorizontalFlip(),
+        v2.RandomAffine(degrees=10, translate=(0.05, 0.05)),
+        v2.ColorJitter(brightness=0.2, contrast=0.2),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+    ])
 
-EVAL_TRANSFORM = v2.Compose([
-    v2.Resize(INPUT_SIZE, antialias=True),
-    v2.ToDtype(torch.float32, scale=True),
-    v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-])
+
+def eval_transform(input_size):
+    return v2.Compose([
+        v2.Resize(input_size, antialias=True),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+    ])
 
 
 def to_tensor(gray):
@@ -83,11 +96,20 @@ def to_tensor(gray):
     return torch.from_numpy(gray).unsqueeze(0).expand(3, -1, -1).contiguous()
 
 
-class XrayDataset(Dataset):
-    """Holds every image in memory (~250 MB) so training is not disk-bound."""
+def image_path(row, size):
+    """Use the downscaled cache when it is big enough, otherwise the original image."""
+    if size <= CACHE_SIZE:
+        return IMAGES_DIR / row["path"]
+    return RAW_DIR / "images" / row["folder"] / row["image_id"]
 
-    def __init__(self, frame, transform):
-        self.images = [to_tensor(load_square(IMAGES_DIR / p, LOAD_SIZE)) for p in frame["path"]]
+
+class XrayDataset(Dataset):
+    """Holds every image in memory so training is not disk-bound."""
+
+    def __init__(self, frame, input_size, transform):
+        size = load_size(input_size)
+        self.images = [to_tensor(load_square(image_path(row, size), size))
+                       for _, row in tqdm(frame.iterrows(), total=len(frame), desc="Loading", leave=False)]
         self.labels = torch.tensor(frame["fractured"].to_numpy(), dtype=torch.float32)
         self.transform = transform
 
@@ -96,6 +118,15 @@ class XrayDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.transform(self.images[idx]), self.labels[idx]
+
+
+def load_checkpoint(name, device):
+    """Model from models/<name>.pt plus its input size (older checkpoints are 224 px)."""
+    checkpoint = torch.load(MODELS_DIR / f"{name}.pt", map_location="cpu")
+    model = build_model(checkpoint["arch"], pretrained=False)
+    model.load_state_dict(checkpoint["state_dict"])
+    model.to(device).eval()
+    return model, checkpoint["arch"], checkpoint.get("input_size", DEFAULT_SIZE)
 
 
 @torch.no_grad()
@@ -113,25 +144,29 @@ def predict(model, loader, device):
 def main():
     parser = argparse.ArgumentParser(description="Fine-tune a CNN on FracAtlas")
     parser.add_argument("--arch", default="resnet18", choices=ARCHITECTURES)
+    parser.add_argument("--size", type=int, default=DEFAULT_SIZE, help="input resolution in pixels")
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--patience", type=int, default=6, help="early-stopping patience")
+    parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args()
 
-    torch.manual_seed(SEED)
-    np.random.seed(SEED)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     device = get_device()
-    print("Device:", device)
+    name = run_name(args.arch, args.size)
+    print(f"Run {name} on {device}")
 
     df = pd.read_csv(METADATA_PATH)
     frames = {s: df[df["split"] == s].reset_index(drop=True) for s in ("train", "val", "test")}
 
-    train_ds = XrayDataset(frames["train"], TRAIN_TRANSFORM)
+    train_ds = XrayDataset(frames["train"], args.size, train_transform(args.size))
+    evaluate_tf = eval_transform(args.size)
     loaders = {
         "train": DataLoader(train_ds, batch_size=args.batch_size, shuffle=True),
-        "val": DataLoader(XrayDataset(frames["val"], EVAL_TRANSFORM), batch_size=64),
-        "test": DataLoader(XrayDataset(frames["test"], EVAL_TRANSFORM), batch_size=64),
+        "val": DataLoader(XrayDataset(frames["val"], args.size, evaluate_tf), batch_size=32),
+        "test": DataLoader(XrayDataset(frames["test"], args.size, evaluate_tf), batch_size=32),
     }
 
     model = build_model(args.arch).to(device)
@@ -146,7 +181,7 @@ def main():
     )
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    checkpoint = MODELS_DIR / f"cnn_{args.arch}.pt"
+    checkpoint = MODELS_DIR / f"{name}.pt"
     y_val = frames["val"]["fractured"].to_numpy()
     best_ap, best_epoch, history = -1.0, 0, []
 
@@ -169,11 +204,12 @@ def main():
         train_loss = running / len(train_ds)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_pr_auc": val_ap, "val_roc_auc": val_auc})
         print(f"epoch {epoch:>2}  loss {train_loss:.4f}  val PR-AUC {val_ap:.3f}  "
-              f"ROC-AUC {val_auc:.3f}  ({time.time() - start:.0f}s)")
+              f"ROC-AUC {val_auc:.3f}  ({time.time() - start:.0f}s)", flush=True)
 
         if val_ap > best_ap:
             best_ap, best_epoch = val_ap, epoch
-            torch.save({"arch": args.arch, "state_dict": model.state_dict()}, checkpoint)
+            torch.save({"arch": args.arch, "input_size": args.size, "state_dict": model.state_dict()},
+                       checkpoint)
         elif epoch - best_epoch >= args.patience:
             print(f"Early stopping: no improvement since epoch {best_epoch}")
             break
@@ -186,9 +222,9 @@ def main():
         part["score"] = predict(model, loaders[split], device)
         rows.append(part)
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    pd.concat(rows).to_csv(PREDICTIONS_DIR / f"cnn_{args.arch}.csv", index=False)
+    pd.concat(rows).to_csv(PREDICTIONS_DIR / f"{name}.csv", index=False)
 
-    (MODELS_DIR / f"cnn_{args.arch}_history.json").write_text(
+    (MODELS_DIR / f"{name}_history.json").write_text(
         json.dumps({"best_epoch": best_epoch, "args": vars(args), "history": history}, indent=2)
     )
     print(f"Best epoch {best_epoch} (val PR-AUC {best_ap:.3f}); saved {checkpoint.name}")

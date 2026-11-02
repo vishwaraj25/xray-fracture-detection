@@ -1,13 +1,14 @@
 """
-Grad-CAM explanations for the CNN, checked against FracAtlas fracture boxes.
+Grad-CAM explanations for a trained CNN, checked against FracAtlas fracture boxes.
 
-  python src/explain.py --arch resnet18
+  python src/explain.py                      # cnn_resnet18
+  python src/explain.py --run cnn_resnet18_384
 
 Writes:
-  - reports/figures/gradcam_examples.png: heatmaps with the radiologist's boxes
-  - a "pointing game" score: for fractured test images the model flags, how
-    often the hottest Grad-CAM pixel falls inside an annotated fracture box.
-    High = the model looks at the fracture; low = it relies on something else.
+  - reports/figures/gradcam_<run>.png: heatmaps with the radiologist's boxes
+  - reports/gradcam_<run>.md: a "pointing game" score. For fractured test images
+    the model flags, how often the hottest Grad-CAM pixel falls on an annotated
+    fracture box. High = the model looks at the fracture; low = it relies on something else.
 """
 import argparse
 
@@ -16,10 +17,9 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 
-from config import FIGURES_DIR, IMAGES_DIR, METADATA_PATH, MODELS_DIR, PREDICTIONS_DIR, RAW_DIR, REPORTS_DIR
+from config import FIGURES_DIR, METADATA_PATH, PREDICTIONS_DIR, RAW_DIR, REPORTS_DIR
 from features import load_square
 from plotting import FRACTURED, TEXT_MUTED, plt, save
-from train_cnn import EVAL_TRANSFORM, INPUT_SIZE, LOAD_SIZE, build_model, get_device, to_tensor
 
 TARGET_LAYERS = {
     "resnet18": lambda m: m.layer4,
@@ -28,9 +28,10 @@ TARGET_LAYERS = {
     "efficientnet_b0": lambda m: m.features,
 }
 
-
 # The last conv block of these networks has stride 32
 CAM_CELL = 32
+# Strict pointing-game tolerance, in pixels of a 224 px input (scaled for other sizes)
+STRICT_MARGIN_224 = 8
 
 
 class GradCAM:
@@ -48,26 +49,27 @@ class GradCAM:
         self.gradients = grad_output[0]
 
     def __call__(self, image):
+        """Heatmap at the input's resolution (normalised to 0..1) and the sigmoid score."""
         self.model.zero_grad()
         logit = self.model(image.unsqueeze(0))
         logit.sum().backward()
         weights = self.gradients.mean(dim=(2, 3), keepdim=True)
         cam = F.relu((weights * self.activations).sum(dim=1, keepdim=True))
-        cam = F.interpolate(cam, size=(INPUT_SIZE, INPUT_SIZE), mode="bilinear", align_corners=False)
+        cam = F.interpolate(cam, size=tuple(image.shape[-2:]), mode="bilinear", align_corners=False)
         cam = cam.squeeze().detach().cpu().numpy()
         return cam / (cam.max() + 1e-8), torch.sigmoid(logit).item()
 
 
-def fracture_boxes(image_id, cached_shape):
+def fracture_boxes(image_id, original_shape, square_size, input_size):
     """YOLO boxes (normalised to the original image) mapped into the square model input."""
     path = RAW_DIR / "Annotations" / "YOLO" / image_id.replace(".jpg", ".txt")
     if not path.exists():
         return []
-    h, w = cached_shape
-    scale = LOAD_SIZE / max(h, w)
+    h, w = original_shape
+    scale = square_size / max(h, w)
     new_w, new_h = round(w * scale), round(h * scale)
-    left, top = (LOAD_SIZE - new_w) // 2, (LOAD_SIZE - new_h) // 2
-    to_input = INPUT_SIZE / LOAD_SIZE
+    left, top = (square_size - new_w) // 2, (square_size - new_h) // 2
+    to_input = input_size / square_size
     boxes = []
     for line in path.read_text().split("\n"):
         if not line.strip():
@@ -79,7 +81,7 @@ def fracture_boxes(image_id, cached_shape):
     return boxes
 
 
-def hit(cam, boxes, margin=8):
+def hit(cam, boxes, margin):
     """Pointing game: is the CAM peak inside (or within `margin` px of) any box?"""
     y, x = np.unravel_index(cam.argmax(), cam.shape)
     return any(bx - margin <= x <= bx + bw + margin and by - margin <= y <= by + bh + margin
@@ -87,40 +89,40 @@ def hit(cam, boxes, margin=8):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Grad-CAM for the fracture CNN")
-    parser.add_argument("--arch", default="resnet18", choices=TARGET_LAYERS)
+    from evaluate import threshold_for_sensitivity
+    from train_cnn import eval_transform, get_device, image_path, load_checkpoint, load_size, to_tensor
+
+    parser = argparse.ArgumentParser(description="Grad-CAM for a trained fracture CNN")
+    parser.add_argument("--run", default="cnn_resnet18", help="checkpoint name in models/")
     parser.add_argument("--examples", type=int, default=8)
     args = parser.parse_args()
 
     device = get_device()
-    model = build_model(args.arch, pretrained=False)
-    state = torch.load(MODELS_DIR / f"cnn_{args.arch}.pt", map_location="cpu")["state_dict"]
-    model.load_state_dict(state)
-    model.to(device).eval()
-    cam = GradCAM(model, TARGET_LAYERS[args.arch](model))
+    model, arch, input_size = load_checkpoint(args.run, device)
+    square_size = load_size(input_size)
+    transform = eval_transform(input_size)
+    cam = GradCAM(model, TARGET_LAYERS[arch](model))
+    strict = STRICT_MARGIN_224 * input_size / 224
 
     meta = pd.read_csv(METADATA_PATH).set_index("image_id")
-    preds = pd.read_csv(PREDICTIONS_DIR / f"cnn_{args.arch}.csv")
+    preds = pd.read_csv(PREDICTIONS_DIR / f"{args.run}.csv")
     val = preds[preds["split"] == "val"]
-    # Same rule as evaluate.py: threshold giving 85% sensitivity on validation
-    pos_scores = np.sort(val.loc[val["y_true"] == 1, "score"].to_numpy())[::-1]
-    threshold = pos_scores[int(np.ceil(0.85 * len(pos_scores))) - 1]
+    threshold = threshold_for_sensitivity(val["y_true"].to_numpy(), val["score"].to_numpy())
 
     flagged = preds[(preds["split"] == "test") & (preds["y_true"] == 1) & (preds["score"] >= threshold)]
     results = []
     for image_id in flagged["image_id"]:
-        gray = load_square(IMAGES_DIR / meta.loc[image_id, "path"], LOAD_SIZE)
-        tensor = EVAL_TRANSFORM(to_tensor(gray)).to(device)
+        row = meta.loc[image_id]
+        gray = load_square(image_path({**row, "image_id": image_id}, square_size), square_size)
+        tensor = transform(to_tensor(gray)).to(device)
         heatmap, score = cam(tensor)
-        cached = plt.imread(IMAGES_DIR / meta.loc[image_id, "path"]).shape[:2]
-        boxes = fracture_boxes(image_id, cached)
+        boxes = fracture_boxes(image_id, (row["orig_height"], row["orig_width"]), square_size, input_size)
         if boxes:
-            results.append({"image_id": image_id, "score": score, "hit": hit(heatmap, boxes),
-                            "hit_cell": hit(heatmap, boxes, margin=CAM_CELL),
-                            "hardware": meta.loc[image_id, "hardware"],
-                            "dup_group": meta.loc[image_id, "dup_group"],
+            results.append({"image_id": image_id, "score": score, "hit": hit(heatmap, boxes, strict),
+                            "hit_cell": hit(heatmap, boxes, CAM_CELL),
+                            "hardware": row["hardware"], "dup_group": row["dup_group"],
                             "heatmap": heatmap, "boxes": boxes,
-                            "image": np.asarray(EVAL_TRANSFORM.transforms[0](to_tensor(gray))[0])})
+                            "image": np.asarray(transform.transforms[0](to_tensor(gray))[0])})
 
     table = pd.DataFrame(results)
     summary = {
@@ -128,7 +130,8 @@ def main():
         "no implant": table[table["hardware"] == 0],
         "metal implant": table[table["hardware"] == 1],
     }
-    lines = ["| images | n | peak within 8 px | peak within one CAM cell (32 px) |", "|---|---|---|---|"]
+    lines = [f"| images | n | peak within {strict:.0f} px | peak within one CAM cell ({CAM_CELL} px) |",
+             "|---|---|---|---|"]
     for label, part in summary.items():
         lines.append(f"| {label} | {len(part)} | {part['hit'].mean():.0%} | {part['hit_cell'].mean():.0%} |")
     print("\n".join(lines))
@@ -156,15 +159,16 @@ def main():
         ax.axis("off")
     fig.suptitle("Grad-CAM (heat) vs annotated fracture box (green)", x=0.02, ha="left",
                  fontsize=12, fontweight="semibold")
-    save(fig, FIGURES_DIR / "gradcam_examples.png")
+    figure = f"gradcam_{args.run}.png"
+    save(fig, FIGURES_DIR / figure)
 
-    (REPORTS_DIR / f"gradcam_{args.arch}.md").write_text(
-        f"# Grad-CAM: {args.arch}\n\n"
+    (REPORTS_DIR / f"gradcam_{args.run}.md").write_text(
+        f"# Grad-CAM: {args.run}\n\n"
         "Pointing game on test fractures the model correctly flagged: how often the Grad-CAM peak "
         f"lies on an annotated fracture box. The CAM grid is coarse ({CAM_CELL} px cells on a "
-        f"{INPUT_SIZE} px input), so both a strict and a one-cell tolerance are shown.\n\n"
+        f"{input_size} px input), so both a strict and a one-cell tolerance are shown.\n\n"
         + "\n".join(lines) + "\n\n"
-        "![Grad-CAM examples](figures/gradcam_examples.png)\n"
+        f"![Grad-CAM examples](figures/{figure})\n"
     )
 
 

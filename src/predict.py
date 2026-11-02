@@ -5,46 +5,26 @@ Usage:
     python src/predict.py path/to/xray.jpg [more.jpg ...]
     python src/predict.py --model svm_rbf path/to/xray.jpg
 
---model is a CNN architecture (resnet18, ...) or a classical model name
-(logistic_regression, svm_rbf, random_forest, gradient_boosting).
-The decision threshold is the one chosen on the validation split by evaluate.py.
+--model is "ensemble", a CNN run (cnn_resnet18, cnn_resnet18_384, ...) or a classical
+model (logistic_regression, svm_rbf, random_forest, gradient_boosting).
+The default is the model evaluate.py picked on the validation split.
+The decision threshold is the one chosen on the validation split.
 """
 import argparse
-import json
 from pathlib import Path
 
 import joblib
-import numpy as np
 import pandas as pd
 
 from config import MODELS_DIR, PREDICTIONS_DIR
 from evaluate import threshold_for_sensitivity
-from features import extract_features, load_square
+from features import extract_features
 
 
-def validation_threshold(prediction_name):
-    preds = pd.read_csv(PREDICTIONS_DIR / f"{prediction_name}.csv")
+def validation_threshold(name):
+    preds = pd.read_csv(PREDICTIONS_DIR / f"{name}.csv")
     val = preds[preds["split"] == "val"]
     return threshold_for_sensitivity(val["y_true"].to_numpy(), val["score"].to_numpy())
-
-
-def cnn_scorer(arch):
-    import torch
-
-    from train_cnn import EVAL_TRANSFORM, LOAD_SIZE, build_model, get_device, to_tensor
-
-    device = get_device()
-    model = build_model(arch, pretrained=False)
-    model.load_state_dict(torch.load(MODELS_DIR / f"cnn_{arch}.pt", map_location="cpu")["state_dict"])
-    model.to(device).eval()
-
-    @torch.no_grad()
-    def score(path):
-        image = EVAL_TRANSFORM(to_tensor(load_square(path, LOAD_SIZE))).unsqueeze(0).to(device)
-        logits = (model(image) + model(torch.flip(image, dims=[3]))) / 2
-        return torch.sigmoid(logits).item()
-
-    return score
 
 
 def classical_scorer(name):
@@ -59,28 +39,33 @@ def classical_scorer(name):
     return score
 
 
-def default_model():
-    best = MODELS_DIR / "best_model.json"
-    return json.loads(best.read_text())["name"] if best.exists() else "resnet18"
+def cnn_scorer(name):
+    from inference import FractureAnalyzer
+
+    analyzer = FractureAnalyzer(name)
+    return lambda path: analyzer.score(Path(path).read_bytes())
 
 
 def main():
+    from inference import default_model_name
+
     parser = argparse.ArgumentParser(description="Predict fractures in X-ray images")
     parser.add_argument("images", nargs="+", help="X-ray image file(s)")
-    parser.add_argument("--model", default=None, help="model name (default: best from evaluate.py)")
+    parser.add_argument("--model", default=None, help="model name (default: best on validation)")
     args = parser.parse_args()
 
-    name = args.model or default_model()
-    is_cnn = (MODELS_DIR / f"cnn_{name}.pt").exists()
-    prediction_name = f"cnn_{name}" if is_cnn else name
+    name = args.model or default_model_name()
+    if not name.startswith("cnn_") and name != "ensemble" and (MODELS_DIR / f"cnn_{name}.pt").exists():
+        name = f"cnn_{name}"  # allow "--model resnet18"
+    is_cnn = name == "ensemble" or (MODELS_DIR / f"{name}.pt").exists()
     score = cnn_scorer(name) if is_cnn else classical_scorer(name)
-    threshold = validation_threshold(prediction_name)
-    print(f"Model: {prediction_name} (threshold {threshold:.3f})")
+    threshold = validation_threshold(name)
+    print(f"Model: {name} (threshold {threshold:.3f})")
 
     for image_path in args.images:
         try:
             s = score(image_path)
-        except ValueError as err:
+        except (ValueError, FileNotFoundError) as err:
             print(f"{image_path}: {err}")
             continue
         label = "Fractured" if s >= threshold else "Not fractured"

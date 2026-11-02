@@ -1,16 +1,18 @@
 """
-Single-image analysis used by the web app.
+Single-image analysis used by the web app and predict.py.
 
 FractureAnalyzer.analyze() runs the same steps as training/evaluation and
 returns every intermediate result, so the UI can show what happened:
   1. decode     - read JPEG/PNG/DICOM, convert to grayscale
-  2. preprocess - letterbox to a square and resize to the network input
-  3. classify   - CNN score, averaged with a horizontally flipped copy
-  4. explain    - Grad-CAM heatmap mapped back onto the original image
+  2. preprocess - letterbox to a square and resize to each network's input
+  3. classify   - CNN score(s), averaged with a horizontally flipped copy;
+                  an ensemble averages its members' probabilities
+  4. explain    - Grad-CAM heatmap(s) mapped back onto the original image
   5. decide     - compare the score with the validation-chosen threshold
 """
 import base64
 import io
+import json
 import threading
 import time
 
@@ -19,14 +21,15 @@ import numpy as np
 import pandas as pd
 import torch
 from PIL import Image, ImageOps
+from sklearn.metrics import roc_auc_score
 
 from config import MODELS_DIR, PREDICTIONS_DIR
-from evaluate import threshold_for_sensitivity, threshold_metrics, TARGET_SENSITIVITY
+from evaluate import TARGET_SENSITIVITY, display_name, threshold_for_sensitivity, threshold_metrics
 from explain import CAM_CELL, TARGET_LAYERS, GradCAM
-from sklearn.metrics import roc_auc_score
-from train_cnn import EVAL_TRANSFORM, INPUT_SIZE, LOAD_SIZE, build_model, get_device, to_tensor
+from train_cnn import eval_transform, get_device, load_checkpoint, load_size, to_tensor
 
 DISPLAY_MAX = 1024
+DEFAULT_MODEL = "cnn_resnet18"
 
 
 def png_base64(array):
@@ -75,27 +78,64 @@ def letterbox(gray, size):
     return canvas, (top, left, new_h, new_w)
 
 
+def default_model_name():
+    """The model evaluate.py picked on validation, if it can run here."""
+    best = MODELS_DIR / "best_model.json"
+    name = json.loads(best.read_text())["name"] if best.exists() else DEFAULT_MODEL
+    if name == "ensemble" or (MODELS_DIR / f"{name}.pt").exists():
+        return name
+    return DEFAULT_MODEL
+
+
+class CNNMember:
+    """One trained CNN with its own input size and Grad-CAM hook."""
+
+    def __init__(self, name, device):
+        self.name = name
+        self.device = device
+        self.model, self.arch, self.input_size = load_checkpoint(name, device)
+        self.load_size = load_size(self.input_size)
+        self.transform = eval_transform(self.input_size)
+        self.cam = GradCAM(self.model, TARGET_LAYERS[self.arch](self.model))
+
+    def prepare(self, gray):
+        square, placement = letterbox(gray, self.load_size)
+        return square, placement, self.transform(to_tensor(square)).to(self.device)
+
+    def run(self, tensor, placement, display_shape):
+        """Flip-averaged probability and a CAM resized onto the displayed image."""
+        with torch.no_grad():
+            flipped = torch.sigmoid(self.model(torch.flip(tensor, dims=[2]).unsqueeze(0))).item()
+        heatmap, score = self.cam(tensor)
+        top, left, new_h, new_w = placement
+        scale = self.input_size / self.load_size
+        crop = heatmap[round(top * scale):round((top + new_h) * scale),
+                       round(left * scale):round((left + new_w) * scale)]
+        dh, dw = display_shape
+        return (score + flipped) / 2, np.clip(cv2.resize(crop, (dw, dh), interpolation=cv2.INTER_CUBIC), 0, 1)
+
+
 class FractureAnalyzer:
-    def __init__(self, arch="resnet18"):
-        self.arch = arch
+    def __init__(self, name=None):
+        self.name = name or default_model_name()
         self.device = get_device()
-        self.model = build_model(arch, pretrained=False)
-        state = torch.load(MODELS_DIR / f"cnn_{arch}.pt", map_location="cpu")["state_dict"]
-        self.model.load_state_dict(state)
-        self.model.to(self.device).eval()
-        self.cam = GradCAM(self.model, TARGET_LAYERS[arch](self.model))
+        if self.name == "ensemble":
+            members = json.loads((MODELS_DIR / "ensemble.json").read_text())["members"]
+        else:
+            members = [self.name]
+        self.members = [CNNMember(m, self.device) for m in members]
         # Grad-CAM keeps per-call state on the hooks, so one analysis at a time
         self.lock = threading.Lock()
         self.info = self._model_info()
 
     def _model_info(self):
-        preds = pd.read_csv(PREDICTIONS_DIR / f"cnn_{self.arch}.csv")
+        preds = pd.read_csv(PREDICTIONS_DIR / f"{self.name}.csv")
         val, test = preds[preds["split"] == "val"], preds[preds["split"] == "test"]
         threshold = threshold_for_sensitivity(val["y_true"].to_numpy(), val["score"].to_numpy())
         m = threshold_metrics(test["y_true"].to_numpy(), test["score"].to_numpy(), threshold)
         return {
-            "model": {"resnet18": "ResNet-18", "resnet50": "ResNet-50", "densenet121": "DenseNet-121",
-                      "efficientnet_b0": "EfficientNet-B0"}.get(self.arch, self.arch),
+            "model": "Ensemble" if self.name == "ensemble" else display_name(self.name).removeprefix("CNN: "),
+            "members": [display_name(m.name).removeprefix("CNN: ") for m in self.members],
             "dataset": "FracAtlas",
             "threshold": float(threshold),
             "target_sensitivity": TARGET_SENSITIVITY,
@@ -107,6 +147,10 @@ class FractureAnalyzer:
             },
             "device": str(self.device),
         }
+
+    def score(self, data):
+        """Probability only, for command-line use."""
+        return self.analyze(data)["score"]
 
     def analyze(self, data):
         steps = []
@@ -121,29 +165,33 @@ class FractureAnalyzer:
         step("decode", "Image loaded", t, f"{fmt} · {w}×{h} px")
 
         t = time.perf_counter()
-        square, (top, left, new_h, new_w) = letterbox(gray, LOAD_SIZE)
-        tensor = EVAL_TRANSFORM(to_tensor(square)).to(self.device)
-        model_input = cv2.resize(square, (INPUT_SIZE, INPUT_SIZE), interpolation=cv2.INTER_AREA)
-        step("preprocess", "Preprocessed", t, f"padded to square · {INPUT_SIZE}×{INPUT_SIZE} input")
+        prepared = [m.prepare(gray) for m in self.members]
+        # Preview what the highest-resolution member sees
+        biggest = max(range(len(self.members)), key=lambda i: self.members[i].input_size)
+        size = self.members[biggest].input_size
+        model_input = cv2.resize(prepared[biggest][0], (size, size), interpolation=cv2.INTER_AREA)
+        sizes = sorted({m.input_size for m in self.members})
+        step("preprocess", "Preprocessed", t,
+             f"padded to square · {' / '.join(f'{s}×{s}' for s in sizes)} input")
 
         t = time.perf_counter()
-        with self.lock:
-            with torch.no_grad():
-                flipped = torch.sigmoid(self.model(torch.flip(tensor, dims=[2]).unsqueeze(0))).item()
-            heatmap, score = self.cam(tensor)
-        score = (score + flipped) / 2
-        step("classify", "Model inference", t, f"{self.info['model']} · flip-averaged")
-
-        t = time.perf_counter()
-        # Map the CAM from the padded square back onto the original image
-        scale = INPUT_SIZE / LOAD_SIZE
-        crop = heatmap[round(top * scale):round((top + new_h) * scale),
-                       round(left * scale):round((left + new_w) * scale)]
         display_scale = min(1.0, DISPLAY_MAX / max(h, w))
         dw, dh = round(w * display_scale), round(h * display_scale)
+        scores, cams = [], []
+        with self.lock:
+            for member, (_, placement, tensor) in zip(self.members, prepared):
+                s, c = member.run(tensor, placement, (dh, dw))
+                scores.append(s)
+                cams.append(c)
+        score = float(np.mean(scores))
+        detail = (f"{len(self.members)} CNNs averaged · flip-averaged" if len(self.members) > 1
+                  else f"{self.info['model']} · flip-averaged")
+        step("classify", "Model inference", t, detail)
+
+        t = time.perf_counter()
         display = cv2.resize(gray, (dw, dh), interpolation=cv2.INTER_AREA)
-        cam_full = cv2.resize(crop, (dw, dh), interpolation=cv2.INTER_CUBIC)
-        cam_full = np.clip(cam_full, 0, 1)
+        cam_full = np.mean(cams, axis=0)
+        cam_full = cam_full / (cam_full.max() + 1e-8)
         peak_y, peak_x = np.unravel_index(cam_full.argmax(), cam_full.shape)
         # Grad-CAM is normalised per image, so on a negative image it would still look
         # "hot". Fade it by how close the score is to the threshold to avoid implying a finding.
@@ -161,10 +209,11 @@ class FractureAnalyzer:
 
         return {
             "score": score,
+            "member_scores": [float(s) for s in scores],
             "threshold": threshold,
             "positive": bool(positive),
             "finding": "Fracture suspected" if positive else "No fracture detected",
-            "confidence_note": confidence_note(score, threshold),
+            "confidence_note": confidence_note(score, threshold, scores),
             "peak": {"x": float(peak_x / dw), "y": float(peak_y / dh)},
             "images": {
                 "original": jpeg_base64(display),
@@ -176,8 +225,12 @@ class FractureAnalyzer:
         }
 
 
-def confidence_note(score, threshold):
-    """Plain-language distance from the decision boundary."""
+def confidence_note(score, threshold, member_scores=()):
+    """Plain-language distance from the decision boundary, plus ensemble disagreement."""
+    if len(member_scores) > 1:
+        votes = sum(s >= threshold for s in member_scores)
+        if 0 < votes < len(member_scores):
+            return f"Models disagree ({votes} of {len(member_scores)} flag a fracture). Review carefully."
     margin = abs(score - threshold)
     if margin < 0.1:
         return "Borderline: close to the decision threshold. Review carefully."

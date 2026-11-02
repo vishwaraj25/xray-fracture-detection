@@ -25,6 +25,7 @@ const els = {
   meterFill: $("meter-fill"), meterThreshold: $("meter-threshold"),
   score: $("score"), threshold: $("threshold"),
   referenceRow: $("reference-row"), reference: $("reference"),
+  agreementRow: $("agreement-row"), agreement: $("agreement"),
   about: $("about"), modelFigures: $("model-figures"),
   newAnalysis: $("new-analysis"), toast: $("toast"), dragOverlay: $("drag-overlay"),
   tabs: [...document.querySelectorAll(".segmented button")],
@@ -196,13 +197,24 @@ function showResult(data, referenceLabel) {
     els.meterFill.style.width = `${Math.max(data.score * 100, 0.8)}%`;
   }));
 
+  const members = data.member_scores || [];
+  els.agreementRow.hidden = members.length < 2;
+  if (members.length > 1) {
+    const votes = members.filter((s) => s >= data.threshold).length;
+    els.agreement.textContent = `${votes} of ${members.length}`;
+  }
+
   els.referenceRow.hidden = !referenceLabel;
   if (referenceLabel) els.reference.textContent = referenceLabel;
 
   if (modelInfo) {
     const t = modelInfo.test;
+    const memberRows = modelInfo.members.length > 1
+      ? modelInfo.members.map((m, i) => [i ? "" : "Members", m])
+      : [];
     els.modelFigures.innerHTML = [
       ["Model", modelInfo.model],
+      ...memberRows,
       ["Trained on", `${modelInfo.dataset}`],
       ["Test sensitivity", pct(t.sensitivity)],
       ["Test specificity", pct(t.specificity)],

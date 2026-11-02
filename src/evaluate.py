@@ -34,10 +34,21 @@ DISPLAY_NAMES = {
     "random_forest": "Random forest",
     "gradient_boosting": "Gradient boosting",
     "cnn_resnet18": "CNN: ResNet-18",
+    "cnn_resnet18_384": "CNN: ResNet-18, 384 px",
     "cnn_resnet50": "CNN: ResNet-50",
     "cnn_densenet121": "CNN: DenseNet-121",
     "cnn_efficientnet_b0": "CNN: EfficientNet-B0",
+    "ensemble": "Ensemble of CNNs",
 }
+
+
+def display_name(name):
+    if name in DISPLAY_NAMES:
+        return DISPLAY_NAMES[name]
+    if name.startswith("cnn_"):
+        arch, _, size = name.removeprefix("cnn_").rpartition("_")
+        return f"CNN: {arch}, {size} px" if size.isdigit() else f"CNN: {name.removeprefix('cnn_')}"
+    return name
 
 
 def threshold_for_sensitivity(y, scores, target=TARGET_SENSITIVITY):
@@ -86,6 +97,7 @@ def evaluate_model(df, rng):
     threshold = threshold_for_sensitivity(val["y_true"].to_numpy(), val["score"].to_numpy())
 
     result = {
+        "val_pr_auc": average_precision_score(val["y_true"], val["score"]),
         "roc_auc": roc_auc_score(y, s),
         "roc_auc_ci": bootstrap_ci(y, s, roc_auc_score, rng),
         "pr_auc": average_precision_score(y, s),
@@ -114,7 +126,7 @@ def plot_curves(preds, results):
         dashed = "--" if name == "metadata_baseline" else "-"
         fpr, tpr, _ = roc_curve(test["y_true"], test["score"])
         prec, rec, _ = precision_recall_curve(test["y_true"], test["score"])
-        label = DISPLAY_NAMES.get(name, name)
+        label = display_name(name)
         axes[0].plot(fpr, tpr, dashed, color=color,
                      label=f"{label} ({results[name]['roc_auc']:.2f})")
         axes[1].plot(rec, prec, dashed, color=color,
@@ -146,7 +158,7 @@ def plot_confusion(name, result):
     ax.set_yticks([0, 1], ["Not fractured", "Fractured"])
     ax.set_xlabel("Predicted")
     ax.set_ylabel("Actual")
-    ax.set_title(f"{DISPLAY_NAMES.get(name, name)}\nthreshold set for {TARGET_SENSITIVITY:.0%} "
+    ax.set_title(f"{display_name(name)}\nthreshold set for {TARGET_SENSITIVITY:.0%} "
                  "sensitivity on validation", fontsize=10)
     save(fig, FIGURES_DIR / "results_confusion_matrix.png")
 
@@ -159,7 +171,7 @@ def plot_region_auc(names, results):
         aucs = [results[name]["region_auc"][r][0] for r in regions]
         x = np.arange(len(regions)) + (i - (len(names) - 1) / 2) * width
         ax.bar(x, aucs, width=width * 0.9, color=SERIES[i % len(SERIES)],
-               label=DISPLAY_NAMES.get(name, name))
+               label=display_name(name))
     regions = list(results[names[0]]["region_auc"])
     counts = [results[names[0]]["region_auc"][r] for r in regions]
     ax.set_xticks(np.arange(len(regions)), [f"{r}\n{k} of {n}\nfractured" for r, (_, k, n) in zip(regions, counts)])
@@ -180,13 +192,16 @@ def write_report(results, best):
         f"The threshold is chosen on the validation split for **{TARGET_SENSITIVITY:.0%} sensitivity**, "
         "then applied to the test split unchanged. The brackets show 95% bootstrap confidence intervals.",
         "",
-        "| Model | ROC-AUC | PR-AUC | Sensitivity | Specificity | Precision | F1 | ROC-AUC, no implants |",
-        "|---|---|---|---|---|---|---|---|",
+        "The best model is picked by **validation** PR-AUC (first column), so choosing it does not use the test set.",
+        "",
+        "| Model | Val PR-AUC | ROC-AUC | PR-AUC | Sensitivity | Specificity | Precision | F1 | ROC-AUC, no implants |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for name, r in results.items():
         bold = "**" if name == best else ""
         lines.append(
-            f"| {bold}{DISPLAY_NAMES.get(name, name)}{bold} "
+            f"| {bold}{display_name(name)}{bold} "
+            f"| {r['val_pr_auc']:.3f} "
             f"| {r['roc_auc']:.3f} [{r['roc_auc_ci'][0]:.2f}–{r['roc_auc_ci'][1]:.2f}] "
             f"| {r['pr_auc']:.3f} [{r['pr_auc_ci'][0]:.2f}–{r['pr_auc_ci'][1]:.2f}] "
             f"| {r['sensitivity']:.2f} | {r['specificity']:.2f} | {r['precision']:.2f} | {r['f1']:.2f} "
@@ -195,7 +210,7 @@ def write_report(results, best):
     b = results[best]
     lines += [
         "",
-        f"**Best model: {DISPLAY_NAMES.get(best, best)}.** At the validation-chosen threshold it finds "
+        f"**Best model: {display_name(best)}.** At the validation-chosen threshold it finds "
         f"{b['tp']} of {b['tp'] + b['fn']} fractures in the test set and raises {b['fp']} false alarms "
         f"out of {b['fp'] + b['tn']} normal images.",
         "",
@@ -210,7 +225,7 @@ def write_report(results, best):
         "",
     ]
     (REPORTS_DIR / "results.md").write_text("\n".join(lines))
-    print("\n".join(lines[:len(results) + 8]))
+    print("\n".join(lines[:len(results) + 10]))
 
 
 def main():
@@ -220,21 +235,24 @@ def main():
         raise SystemExit("No predictions found; run the train_* scripts first")
 
     results = {name: evaluate_model(df, rng) for name, df in preds.items()}
-    # The metadata baseline is a reference point, not a usable image model
+    # Pick on validation, never on test. The metadata baseline is a reference, not an image model.
     image_models = [n for n in results if n != "metadata_baseline"]
-    best = max(image_models, key=lambda n: results[n]["pr_auc"])
+    best = max(image_models, key=lambda n: results[n]["val_pr_auc"])
+    classical = [n for n in image_models if not n.startswith("cnn") and n != "ensemble"]
+    best_classical = max(classical, key=lambda n: results[n]["val_pr_auc"], default=None)
 
-    plot_curves(preds, results)
+    # Curves: baseline, best classical model and every CNN/ensemble (max 8 series)
+    plotted = [n for n in preds if n in ("metadata_baseline", best_classical)
+               or n.startswith("cnn") or n == "ensemble"][:len(SERIES)]
+    plot_curves({n: preds[n] for n in plotted}, results)
     plot_confusion(best, results[best])
-    best_classical = max((n for n in results if not n.startswith("cnn") and n != "metadata_baseline"),
-                         key=lambda n: results[n]["pr_auc"], default=None)
     compared = [n for n in dict.fromkeys(["metadata_baseline", best_classical, best]) if n]
     plot_region_auc(compared, results)
     write_report(results, best)
 
-    # predict.py uses this as its default model
+    # predict.py and the web app use this as their default model
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    (MODELS_DIR / "best_model.json").write_text(json.dumps({"name": best.removeprefix("cnn_")}))
+    (MODELS_DIR / "best_model.json").write_text(json.dumps({"name": best}))
 
 
 if __name__ == "__main__":
