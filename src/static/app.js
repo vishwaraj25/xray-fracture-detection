@@ -1,11 +1,11 @@
 "use strict";
 
 const STEPS = [
-  { key: "decode", label: "Load image" },
-  { key: "preprocess", label: "Preprocess" },
-  { key: "classify", label: "Model inference" },
-  { key: "explain", label: "Attention map" },
-  { key: "decide", label: "Decision" },
+  { key: "decode", label: "Open image" },
+  { key: "preprocess", label: "Prepare image" },
+  { key: "classify", label: "Look for fractures" },
+  { key: "explain", label: "Where it looked" },
+  { key: "decide", label: "Result" },
 ];
 const STEP_PACE_MS = 380;
 const CHECK_SVG = '<svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.5 9.5 3.8"/></svg>';
@@ -207,19 +207,18 @@ function showResult(data, sample) {
   els.referenceRow.hidden = !sample;
   if (sample) els.reference.textContent = sample.label;
   if (sample?.boxes.length) {
-    els.focus.textContent = !data.positive ? "Fracture missed"
-      : focusOnBox(data, sample.boxes) ? "On the fracture" : "Away from the fracture";
+    els.focus.textContent = !data.positive ? "No, it missed this fracture"
+      : focusOnBox(data, sample.boxes) ? "Yes, it looked at the fracture" : "No, it looked elsewhere";
     els.focusRow.hidden = false;
   }
 
   if (modelInfo) {
     const t = modelInfo.test;
     els.modelFigures.innerHTML = [
-      ["Model", modelInfo.model],
-      ["Trained on", `${modelInfo.dataset}`],
-      ["Test sensitivity", pct(t.sensitivity)],
-      ["Test specificity", pct(t.specificity)],
-      ["Test ROC-AUC", t.roc_auc.toFixed(3)],
+      ["Fractures it finds", `${Math.round(t.sensitivity * 100)} of 100`],
+      ["Healthy X-rays it clears", `${Math.round(t.specificity * 100)} of 100`],
+      ["Overall quality (1.0 = perfect)", t.roc_auc.toFixed(2)],
+      ["Model", `${modelInfo.model}, trained on ${modelInfo.dataset}`],
     ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
     els.about.hidden = false;
   }

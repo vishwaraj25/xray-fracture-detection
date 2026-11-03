@@ -28,7 +28,7 @@
     <section class="upload" id="upload-view">
       <div class="upload-inner">
         <h1>Analyse an X-ray</h1>
-        <p class="lede">Upload a musculoskeletal radiograph. The model checks it for fractures and shows where it looked.</p>
+        <p class="lede">Upload an X-ray of a hand, leg, hip or shoulder. An AI model checks it for a broken bone and shows where it looked.</p>
 
         <label class="dropzone" id="dropzone" tabindex="0">
           <input type="file" id="file-input" accept="image/*,.dcm,application/dicom" hidden>
@@ -67,9 +67,9 @@
 
         <div class="toolbar">
           <div class="segmented" role="tablist" aria-label="View">
-            <button role="tab" data-view="image" aria-selected="true">Image</button>
-            <button role="tab" data-view="attention" aria-selected="false" disabled>Attention</button>
-            <button role="tab" data-view="input" aria-selected="false" disabled>Model input</button>
+            <button role="tab" data-view="image" aria-selected="true">Original</button>
+            <button role="tab" data-view="attention" aria-selected="false" disabled>Where it looked</button>
+            <button role="tab" data-view="input" aria-selected="false" disabled>What the model saw</button>
           </div>
           <button class="toggle" id="toggle-boxes" aria-pressed="true" hidden>
             <span class="toggle-swatch" aria-hidden="true"></span>Radiologist box
@@ -80,36 +80,36 @@
 
       <aside class="panel">
         <div class="panel-block">
-          <div class="eyebrow">Pipeline</div>
+          <div class="eyebrow">What the model is doing</div>
           <ol class="steps" id="steps"></ol>
         </div>
 
         <div class="panel-block result" id="result" hidden>
-          <div class="eyebrow">Finding</div>
+          <div class="eyebrow">Result</div>
           <div class="finding" id="finding"></div>
           <p class="note" id="note"></p>
 
           <div class="meter" aria-hidden="true">
             <div class="meter-track">
               <div class="meter-fill" id="meter-fill"></div>
-              <div class="meter-threshold" id="meter-threshold"><span>threshold</span></div>
+              <div class="meter-threshold" id="meter-threshold"><span>cut-off</span></div>
             </div>
-            <div class="meter-scale"><span>0</span><span>Fracture score</span><span>1</span></div>
+            <div class="meter-scale"><span>Unlikely</span><span>Fracture score</span><span>Likely</span></div>
           </div>
 
           <dl class="figures">
-            <div><dt>Score</dt><dd id="score"></dd></div>
-            <div><dt>Threshold</dt><dd id="threshold"></dd></div>
-            <div id="reference-row" hidden><dt>Reference label</dt><dd id="reference"></dd></div>
-            <div id="focus-row" hidden><dt>Model's focus</dt><dd id="focus"></dd></div>
+            <div><dt>Fracture score (0 to 1)</dt><dd id="score"></dd></div>
+            <div><dt>Cut-off for "possible fracture"</dt><dd id="threshold"></dd></div>
+            <div id="reference-row" hidden><dt>What radiologists found</dt><dd id="reference"></dd></div>
+            <div id="focus-row" hidden><dt>Did it look at the fracture?</dt><dd id="focus"></dd></div>
           </dl>
         </div>
 
         <div class="panel-block about" id="about" hidden>
-          <div class="eyebrow">About the model</div>
+          <div class="eyebrow">How reliable is it?</div>
           <dl class="figures compact" id="model-figures"></dl>
-          <p class="fineprint">The threshold is set so that, with 95% confidence, at least 85% of fractures are caught on validation images. Some normal images are therefore flagged.
-            The attention map shows the regions that drove the score; it is not a fracture outline.</p>
+          <p class="fineprint">Measured on test X-rays the model never saw during training. The cut-off is set to catch most fractures,
+            so some healthy X-rays are flagged by mistake. The highlighted area shows where the model looked; it is not an outline of the fracture.</p>
         </div>
 
         <div class="panel-actions">

@@ -51,12 +51,15 @@ def jpeg_base64(array):
 
 
 def confidence_note(score, threshold):
-    """Plain-language distance from the decision boundary."""
+    """What the result means, in plain words, with how sure the model is."""
     if abs(score - threshold) < 0.1:
-        return "Borderline: close to the decision threshold. Review carefully."
+        return "This one is borderline, so the model is not sure. It needs a careful look by a doctor."
     if score >= threshold:
-        return "Well above the threshold." if score > 0.8 else "Above the threshold."
-    return "Well below the threshold." if score < threshold / 3 else "Below the threshold."
+        strength = "strongly" if score > 0.8 else "fairly clearly"
+        return f"The model sees signs that {strength} look like a fracture. A doctor should check this X-ray."
+    strength = "clearly" if score < threshold / 3 else "fairly clearly"
+    return (f"The model sees nothing that {strength} looks like a fracture. "
+            "This does not rule one out: it misses about 1 in 10 fractures.")
 
 
 class FractureAnalyzer:
@@ -78,7 +81,7 @@ class FractureAnalyzer:
         m = threshold_metrics(test["y_true"].to_numpy(), test["score"].to_numpy(), threshold)
         return {
             "model": MODELS["cnn"][0].removeprefix("CNN: "),
-            "dataset": "FracAtlas",
+            "dataset": "FracAtlas + GRAZPEDWRI-DX",
             "threshold": float(threshold),
             "target_sensitivity": TARGET_SENSITIVITY,
             "test": {
@@ -112,7 +115,7 @@ class FractureAnalyzer:
         square, (top, left, new_h, new_w) = letterbox(gray, LOAD_SIZE)
         tensor = self.transform(to_tensor(square)).to(self.device)
         model_input = cv2.resize(square, (CNN_IMAGE_SIZE, CNN_IMAGE_SIZE), interpolation=cv2.INTER_AREA)
-        step("preprocess", "Preprocessed", t, f"padded to square · {CNN_IMAGE_SIZE}×{CNN_IMAGE_SIZE} input")
+        step("preprocess", "Preprocessed", t, f"made square and sharper · {CNN_IMAGE_SIZE}×{CNN_IMAGE_SIZE} px")
 
         t = time.perf_counter()
         with self.lock:
@@ -120,7 +123,7 @@ class FractureAnalyzer:
                 flipped = torch.sigmoid(self.model(torch.flip(tensor, dims=[2]).unsqueeze(0))).item()
             heatmap, original = self.cam(tensor)
         score = (original + flipped) / 2
-        step("classify", "Model inference", t, "ResNet-18 · flip-averaged")
+        step("classify", "Model inference", t, "AI model scores the X-ray")
 
         t = time.perf_counter()
         display_scale = min(1.0, DISPLAY_MAX / max(h, w))
@@ -142,16 +145,16 @@ class FractureAnalyzer:
         overlay = np.zeros((dh, dw, 4), dtype=np.uint8)
         overlay[..., :3] = 255
         overlay[..., 3] = (np.clip((cam - 0.35) / 0.65, 0, 1) ** 1.5 * 200 * strength).astype(np.uint8)
-        step("explain", "Attention map", t, f"Grad-CAM · {CAM_CELL} px resolution")
+        step("explain", "Attention map", t, "heat map of where it looked")
 
         t = time.perf_counter()
-        step("decide", "Decision", t, f"threshold {threshold:.2f}")
+        step("decide", "Decision", t, f"cut-off {threshold:.2f}")
 
         return {
             "score": float(score),
             "threshold": threshold,
             "positive": bool(positive),
-            "finding": "Fracture suspected" if positive else "No fracture detected",
+            "finding": "Possible fracture" if positive else "No fracture found",
             "confidence_note": confidence_note(score, threshold),
             "peak": {"x": float(peak_x / dw), "y": float(peak_y / dh)},
             "images": {
