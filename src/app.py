@@ -34,19 +34,45 @@ def analyzer():
     return FractureAnalyzer()
 
 
+# Example images by outcome, so the demo shows failures as well as successes
+SAMPLE_PLAN = [("caught", 3), ("off target", 1), ("missed", 1), ("false alarm", 1), ("cleared", 2)]
+
+
+def outcome(row, threshold):
+    flagged = row["score"] >= threshold
+    if not row["fractured"]:
+        return "false alarm" if flagged else "cleared"
+    if not flagged:
+        return "missed"
+    # Grad-CAM pointing game from explain.py; unknown when it has not been run
+    if pd.isna(row["hit_cell"]):
+        return "caught"
+    return "caught" if row["hit_cell"] else "off target"
+
+
 @lru_cache(maxsize=1)
 def samples():
-    """A few held-out test images (never used for training) to try the app with."""
-    if not METADATA_PATH.exists():
+    """Held-out test images (never used for training), picked to cover each outcome."""
+    if not (METADATA_PATH.exists() and (PREDICTIONS_DIR / "cnn.csv").exists()):
         return {}
-    df = pd.read_csv(METADATA_PATH)
-    test = df[(df["split"] == "test") & (df["hardware"] == 0)].drop_duplicates("dup_group")
+    preds = pd.read_csv(PREDICTIONS_DIR / "cnn.csv")
+    threshold = validation_threshold(preds)
+    df = pd.read_csv(METADATA_PATH).merge(preds[["image_id", "score"]], on="image_id")
+    cam_path = PREDICTIONS_DIR / "gradcam.csv"
+    hits = pd.read_csv(cam_path)[["image_id", "hit_cell"]] if cam_path.exists() else pd.DataFrame(
+        columns=["image_id", "hit_cell"])
+    df = df.merge(hits, on="image_id", how="left")
+    # Single-region X-rays without implants, one per near-duplicate group
+    test = df[(df["split"] == "test") & (df["hardware"] == 0) & (df["region"] != "mixed")]
+    test = test.drop_duplicates("dup_group").copy()
+    test["outcome"] = test.apply(outcome, axis=1, threshold=threshold)
+
     picks = []
-    for region in ["hand", "leg", "hip", "shoulder"]:
-        for label in (1, 0):
-            pool = test[(test["region"] == region) & (test["fractured"] == label)]
-            if len(pool):
-                picks.append(pool.sample(1, random_state=7).iloc[0])
+    for name, count in SAMPLE_PLAN:
+        pool = test[test["outcome"] == name].sample(frac=1, random_state=7)
+        # Prefer a different body region for each pick of the same outcome
+        chosen = pool.drop_duplicates("region").head(count)
+        picks += chosen.to_dict("records") + pool.drop(chosen.index).head(count - len(chosen)).to_dict("records")
     return {
         row["image_id"].removesuffix(".jpg"): {
             "region": row["region"],
@@ -54,6 +80,7 @@ def samples():
             "file": row["image_id"],
             "thumb": row["path"],
             "label": "Fractured" if row["fractured"] else "Not fractured",
+            "outcome": row["outcome"],
             "boxes": [dict(zip("xywh", box)) for box in annotated_boxes(row["image_id"])],
         }
         for row in picks
@@ -86,7 +113,7 @@ def info():
 
 @app.get("/api/samples")
 def list_samples():
-    return [{"id": key, "region": s["region"], "label": s["label"], "boxes": s["boxes"]}
+    return [{"id": key, "region": s["region"], "label": s["label"], "outcome": s["outcome"], "boxes": s["boxes"]}
             for key, s in samples().items()]
 
 

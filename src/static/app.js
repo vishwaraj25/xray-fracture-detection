@@ -63,8 +63,9 @@ async function loadSamples() {
     for (const s of samples) {
       const btn = document.createElement("button");
       btn.className = "sample";
-      btn.title = `${s.region} X-ray from the test set`;
-      btn.innerHTML = `<img src="/api/samples/${s.id}/thumb" alt="" loading="lazy"><span>${s.region}</span>`;
+      btn.title = `${s.region} X-ray from the test set: ${s.label.toLowerCase()}, model ${s.outcome}`;
+      btn.innerHTML = `<img src="/api/samples/${s.id}/thumb" alt="" loading="lazy">` +
+        `<span>${s.region}<em class="outcome ${["caught", "cleared"].includes(s.outcome) ? "good" : "bad"}">${s.outcome}</em></span>`;
       btn.addEventListener("click", () => analyze(null, s));
       els.sampleGrid.appendChild(btn);
     }

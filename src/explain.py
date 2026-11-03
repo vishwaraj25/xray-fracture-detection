@@ -2,6 +2,7 @@
 Grad-CAM explanations for the CNN, checked against the FracAtlas fracture boxes.
 
 Writes:
+  - reports/predictions/gradcam.csv: the pointing-game result for each image
   - reports/figures/gradcam.png: heatmaps with the radiologists' boxes
   - reports/gradcam.md: a "pointing game" score. For fractured test images the
     CNN flags, how often the hottest Grad-CAM pixel falls on an annotated fracture
@@ -113,6 +114,8 @@ def main():
                             "image": np.asarray(transform.transforms[0](to_tensor(gray))[0])})
 
     table = pd.DataFrame(results)
+    # Per-image result, used by the web app to pick example images
+    table[["image_id", "score", "hit", "hit_cell"]].to_csv(PREDICTIONS_DIR / "gradcam.csv", index=False)
     summary = {
         "all": table,
         "no implant": table[table["hardware"] == 0],

@@ -141,6 +141,9 @@ h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.025em; font-weight: 
   font-size: 11px; color: #fff; text-transform: capitalize;
   background: linear-gradient(transparent, rgba(0,0,0,.75));
 }
+.outcome { display: block; font-style: normal; text-transform: none; white-space: nowrap; font-size: 10px; color: rgba(255,255,255,.7); }
+.outcome.bad::before { content: "× "; }
+.outcome.good::before { content: "✓ "; }
 .sample:hover, .sample:focus-visible { border-color: var(--ink); transform: translateY(-2px); outline: none; }
 .sample:hover img { opacity: 1; }
 
