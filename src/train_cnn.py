@@ -1,7 +1,8 @@
 """
 Fine-tune an ImageNet-pretrained ResNet-18 (transfer learning) to detect fractures.
 
-Run build_dataset.py first. Uses the Apple Silicon GPU (MPS) or CUDA when available
+Run build_dataset.py first. With --with-graz, clean Graz train/validation patients
+are added to training and early stopping (run graz.py --prepare first). Uses the Apple Silicon GPU (MPS) or CUDA when available
 (about 80 minutes on an M2).
 
 The best epoch (by validation PR-AUC) is saved to models/cnn.pt and its
@@ -83,11 +84,17 @@ def image_path(row):
     return RAW_DIR / "images" / row["folder"] / row["image_id"]
 
 
+def source_path(row):
+    """Graz rows carry their own cached file; FracAtlas rows are found from the metadata."""
+    file = row.get("image_file")
+    return file if isinstance(file, str) else image_path(row)
+
+
 class XrayDataset(Dataset):
     """Holds every image in memory so training is not disk-bound."""
 
     def __init__(self, frame, transform):
-        self.images = [to_tensor(load_square(image_path(row), LOAD_SIZE))
+        self.images = [to_tensor(load_square(source_path(row), LOAD_SIZE))
                        for _, row in tqdm(frame.iterrows(), total=len(frame), desc="Loading", leave=False)]
         self.labels = torch.tensor(frame["fractured"].to_numpy(), dtype=torch.float32)
         self.transform = transform
@@ -118,6 +125,8 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--patience", type=int, default=5, help="early-stopping patience")
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--with-graz", action="store_true",
+                        help="also train and validate on Graz patients (run graz.py --prepare first)")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -127,6 +136,12 @@ def main():
 
     df = pd.read_csv(METADATA_PATH)
     frames = {s: df[df["split"] == s].reset_index(drop=True) for s in ("train", "val", "test")}
+    if args.with_graz:
+        from graz import training_frames
+
+        for split, graz in training_frames().items():
+            frames[split] = pd.concat([frames[split], graz], ignore_index=True)
+        print(f"With Graz: {len(frames['train'])} training and {len(frames['val'])} validation images")
 
     train_ds = XrayDataset(frames["train"], train_transform())
     loaders = {
@@ -182,9 +197,12 @@ def main():
     model = load_model(device)
     rows = []
     for split in ("val", "test"):
-        part = frames[split][["image_id", "split", "region", "hardware"]].copy()
-        part["y_true"] = frames[split]["fractured"].to_numpy()
-        part["score"] = predict(model, loaders[split], device)
+        scores = predict(model, loaders[split], device)
+        # FracAtlas images only; graz.py scores the Graz images
+        fracatlas = frames[split]["region"].notna().to_numpy()
+        part = frames[split].loc[fracatlas, ["image_id", "split", "region", "hardware"]].copy()
+        part["y_true"] = frames[split].loc[fracatlas, "fractured"].to_numpy()
+        part["score"] = scores[fracatlas]
         rows.append(part)
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     pd.concat(rows).to_csv(PREDICTIONS_DIR / "cnn.csv", index=False)

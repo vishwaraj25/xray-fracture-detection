@@ -4,8 +4,8 @@ Pointing game on test fractures the CNN correctly flagged: how often the Grad-CA
 
 | images | n | peak within 14 px | peak within one CAM cell (32 px) |
 |---|---|---|---|
-| all | 85 | 53% | 69% |
-| no implant | 72 | 50% | 69% |
-| metal implant | 13 | 69% | 69% |
+| all | 99 | 53% | 61% |
+| no implant | 85 | 51% | 60% |
+| metal implant | 14 | 64% | 64% |
 
 ![Grad-CAM examples](figures/gradcam.png)

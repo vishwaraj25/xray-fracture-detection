@@ -19,17 +19,23 @@ Layout after extraction and `python src/build_dataset.py`:
 - `processed/metadata.csv`: labels, body region, view, image statistics, near-duplicate group and train/val/test split
 - `processed/features/`: cached hand-crafted features
 
-## External test set (optional)
+## Second dataset: GRAZPEDWRI-DX
 
 **GRAZPEDWRI-DX** (Nagy et al., *Scientific Data* 9, 222, 2022): paediatric wrist X-rays from Graz, Austria.
-License: CC BY 4.0. Used only by `src/external_validation.py`, never for training.
-The images come in four zips of about 4 GB each; this project uses part 1 (5,031 labelled X-rays).
-The zip is read directly, so it does not need extracting, and it can be deleted after scoring.
+License: CC BY 4.0. The images come in four zips of about 4 GB each; this project uses part 1 (5,031 labelled X-rays).
 
 ```bash
 mkdir -p data/raw/GRAZPEDWRI-DX && cd data/raw/GRAZPEDWRI-DX
 curl -L -o dataset.csv https://ndownloader.figshare.com/files/35026432
 curl -L -o images_part1.zip https://ndownloader.figshare.com/files/34268828   # 4.0 GB
 ```
+
+`python src/graz.py --prepare` reads the zip without extracting it and writes:
+
+- `processed/graz/`: 8-bit copies of the 16-bit images, padded to a square (about 320 MB)
+- `processed/graz_metadata.csv`: labels, cast/metal flags and a 60/20/20 train/val/test split by patient
+
+After that the zip is no longer needed and can be deleted. The train and validation patients are used by
+`train_cnn.py --with-graz`; the test patients only by `graz.py`.
 
 Git ignores everything in `raw/` and `processed/`.

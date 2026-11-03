@@ -90,11 +90,21 @@ def test_confident_threshold_is_more_conservative():
     assert sensitivity_lower_bound(caught - 1, 110, 0.95) < 0.85
 
 
-def test_external_png_is_windowed_to_8_bit():
-    from external_validation import decode_png
+def test_graz_png_is_windowed_to_8_bit():
+    from graz import decode_png
 
     image = np.linspace(1000, 5000, 64 * 32).reshape(64, 32).astype(np.uint16)
     ok, data = cv2.imencode(".png", image)
     gray = decode_png(data.tobytes(), "test.png")
     assert gray.dtype == np.uint8 and gray.shape == (64, 32)
     assert gray.min() == 0 and gray.max() == 255
+
+
+def test_graz_split_keeps_patients_together():
+    from graz import patient_splits
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame({"patient_id": np.repeat(np.arange(200), 3), "fractured": rng.integers(0, 2, 600)})
+    df["split"] = patient_splits(df)
+    assert (df.groupby("patient_id")["split"].nunique() == 1).all()
+    assert set(df["split"]) == {"train", "val", "test"}

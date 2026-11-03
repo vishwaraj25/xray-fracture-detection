@@ -5,11 +5,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Data
 RAW_DIR = BASE_DIR / "data" / "raw" / "FracAtlas"
-# External test set from another hospital, never used for training (external_validation.py)
-EXTERNAL_DIR = BASE_DIR / "data" / "raw" / "GRAZPEDWRI-DX"
+# Second dataset: paediatric wrists from Graz, split by patient (graz.py)
+GRAZ_DIR = BASE_DIR / "data" / "raw" / "GRAZPEDWRI-DX"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 IMAGES_DIR = PROCESSED_DIR / "images"
 METADATA_PATH = PROCESSED_DIR / "metadata.csv"
+GRAZ_IMAGES_DIR = PROCESSED_DIR / "graz"
+GRAZ_METADATA_PATH = PROCESSED_DIR / "graz_metadata.csv"
 FEATURES_PATH = PROCESSED_DIR / "features" / "hog_lbp.npy"
 
 # The two models
