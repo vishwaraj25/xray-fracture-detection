@@ -22,7 +22,7 @@ const els = {
   original: $("img-original"), attention: $("img-attention"), input: $("img-input"),
   peak: $("peak"), fileMeta: $("file-meta"),
   steps: $("steps"), result: $("result"), finding: $("finding"), note: $("note"),
-  meterFill: $("meter-fill"), meterThreshold: $("meter-threshold"),
+  scale: $("scale"), evidence: $("evidence"),
   score: $("score"), threshold: $("threshold"),
   referenceRow: $("reference-row"), reference: $("reference"),
   focusRow: $("focus-row"), focus: $("focus"),
@@ -194,15 +194,15 @@ async function onStepDone(key, data, sample) {
 
 function showResult(data, sample) {
   els.result.hidden = false;
-  els.result.classList.toggle("positive", data.positive);
+  els.result.dataset.level = data.level;
   els.finding.textContent = data.finding;
   els.note.textContent = data.confidence_note;
   els.score.textContent = data.score.toFixed(3);
   els.threshold.textContent = data.threshold.toFixed(3);
-  els.meterThreshold.style.left = `${data.threshold * 100}%`;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    els.meterFill.style.width = `${Math.max(data.score * 100, 0.8)}%`;
-  }));
+  for (const li of els.scale.children) li.classList.toggle("on", li.dataset.level === data.level);
+  const per100 = modelInfo?.levels?.[data.level];
+  els.evidence.textContent = per100 == null ? "" :
+    `In our tests, of 100 X-rays rated "${data.level}", about ${per100} really had a fracture.`;
 
   els.referenceRow.hidden = !sample;
   if (sample) els.reference.textContent = sample.label;
@@ -321,7 +321,6 @@ function resetAnalysis() {
   els.stage.classList.remove("scanning", "dimmed");
   els.result.hidden = true;
   els.about.hidden = true;
-  els.meterFill.style.width = "0";
   els.tabs.forEach((t) => { t.disabled = t.dataset.view !== "image"; });
   setView("image");
 }

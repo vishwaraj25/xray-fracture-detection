@@ -50,16 +50,24 @@ def jpeg_base64(array):
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
-def confidence_note(score, threshold):
-    """What the result means, in plain words, with how sure the model is."""
-    if abs(score - threshold) < 0.1:
-        return "This one is borderline, so the model is not sure. It needs a careful look by a doctor."
-    if score >= threshold:
-        strength = "strongly" if score > 0.8 else "fairly clearly"
-        return f"The model sees signs that {strength} look like a fracture. A doctor should check this X-ray."
-    strength = "clearly" if score < threshold / 3 else "fairly clearly"
-    return (f"The model sees nothing that {strength} looks like a fracture. "
-            "This does not rule one out: it misses about 1 in 10 fractures.")
+LIKELY_SCORE = 0.6  # at or above this the model is confident: about 8 in 10 such test X-rays were fractured
+
+LEVELS = {
+    "unlikely": ("Fracture unlikely",
+                 "The model found nothing that looks like a fracture. That does not rule one out, "
+                 "so if it hurts, see a doctor."),
+    "possible": ("Possible fracture",
+                 "The model found something that could be a fracture, but it is not sure. "
+                 "A doctor should look at this X-ray."),
+    "likely": ("Likely fracture",
+               "The model found clear signs of a fracture. A doctor should confirm this X-ray."),
+}
+
+
+def level_of(score, threshold):
+    if score < threshold:
+        return "unlikely"
+    return "possible" if score < LIKELY_SCORE else "likely"
 
 
 class FractureAnalyzer:
@@ -78,12 +86,16 @@ class FractureAnalyzer:
         preds = pd.read_csv(PREDICTIONS_DIR / "cnn.csv")
         test = preds[preds["split"] == "test"]
         threshold = validation_threshold(preds)
+        held_out = preds[preds["split"] != "train"]
         m = threshold_metrics(test["y_true"].to_numpy(), test["score"].to_numpy(), threshold)
         return {
             "model": MODELS["cnn"][0].removeprefix("CNN: "),
             "dataset": "FracAtlas + GRAZPEDWRI-DX",
             "threshold": float(threshold),
             "target_sensitivity": TARGET_SENSITIVITY,
+            # Out of 100 held-out X-rays at each level, how many really were fractured
+            "levels": {name: int(round(100 * g["y_true"].mean())) for name, g in
+                       held_out.groupby(held_out["score"].map(lambda v: level_of(v, threshold)))},
             "test": {
                 "images": int(len(test)),
                 "roc_auc": float(roc_auc_score(test["y_true"], test["score"])),
@@ -140,6 +152,7 @@ class FractureAnalyzer:
         # "hot". Fade it by how close the score is to the threshold to avoid implying a finding.
         threshold = self.info["threshold"]
         positive = score >= threshold
+        level = level_of(score, threshold)
         strength = 1.0 if positive else 0.25 + 0.5 * score / threshold
         # White-on-transparent overlay keeps the UI monochrome
         overlay = np.zeros((dh, dw, 4), dtype=np.uint8)
@@ -154,8 +167,9 @@ class FractureAnalyzer:
             "score": float(score),
             "threshold": threshold,
             "positive": bool(positive),
-            "finding": "Possible fracture" if positive else "No fracture found",
-            "confidence_note": confidence_note(score, threshold),
+            "level": level,
+            "finding": LEVELS[level][0],
+            "confidence_note": LEVELS[level][1],
             "peak": {"x": float(peak_x / dw), "y": float(peak_y / dh)},
             "images": {
                 "original": jpeg_base64(display),

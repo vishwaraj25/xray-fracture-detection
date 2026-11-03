@@ -138,7 +138,8 @@ A minimal black-and-white interface for analysing one X-ray:
 
 - Drop, choose or paste an image (JPEG, PNG or DICOM), or click one of the held-out test samples.
 - The steps (load → preprocess → inference → attention map → decision) animate as they finish, each with its real timing.
-- The result shows the finding, the score against the threshold, and the model's test sensitivity and specificity.
+- The result is one of three plain levels (fracture unlikely, possible or likely) with a sentence on what it means and
+  how often X-rays rated that way were really fractured in testing. The raw score sits under "Technical details".
 - The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
   384×384 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
 - For X-rays without a suspected fracture, the attention map is faded and no peak is marked.

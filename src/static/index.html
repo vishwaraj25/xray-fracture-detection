@@ -89,20 +89,24 @@
           <div class="finding" id="finding"></div>
           <p class="note" id="note"></p>
 
-          <div class="meter" aria-hidden="true">
-            <div class="meter-track">
-              <div class="meter-fill" id="meter-fill"></div>
-              <div class="meter-threshold" id="meter-threshold"><span>cut-off</span></div>
-            </div>
-            <div class="meter-scale"><span>Unlikely</span><span>Fracture score</span><span>Likely</span></div>
-          </div>
+          <ol class="scale" id="scale" aria-label="How likely a fracture is">
+            <li data-level="unlikely">Unlikely</li>
+            <li data-level="possible">Possible</li>
+            <li data-level="likely">Likely</li>
+          </ol>
+          <p class="evidence" id="evidence"></p>
 
           <dl class="figures">
-            <div><dt>Fracture score (0 to 1)</dt><dd id="score"></dd></div>
-            <div><dt>Cut-off for "possible fracture"</dt><dd id="threshold"></dd></div>
             <div id="reference-row" hidden><dt>What radiologists found</dt><dd id="reference"></dd></div>
             <div id="focus-row" hidden><dt>Did it look at the fracture?</dt><dd id="focus"></dd></div>
           </dl>
+          <details class="tech">
+            <summary>Technical details</summary>
+            <dl class="figures compact">
+              <div><dt>Model score (0 to 1)</dt><dd id="score"></dd></div>
+              <div><dt>Score needed to flag a fracture</dt><dd id="threshold"></dd></div>
+            </dl>
+          </details>
         </div>
 
         <div class="panel-block about" id="about" hidden>
