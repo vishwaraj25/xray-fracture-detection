@@ -59,6 +59,16 @@ button { font: inherit; color: inherit; }
 .brand-mark rect { fill: var(--ink); }
 .brand-mark path { stroke: var(--bg); stroke-width: 2.4; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .brand-name { font-weight: 600; letter-spacing: -0.01em; }
+.nav { display: flex; gap: 2px; margin-left: 18px; }
+.nav button {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 5px 10px; border-radius: 7px;
+  font-size: 13px; color: var(--ink-3);
+  transition: color .2s, background .2s;
+}
+.nav button:hover { color: var(--ink); }
+.nav button[aria-current] { color: var(--ink); background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+.nav button:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 .status { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
 .status-dot {
   width: 7px; height: 7px; border-radius: 50%;
@@ -176,6 +186,28 @@ h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.025em; font-weight: 
   animation: ring 1.6s var(--ease) 2;
 }
 .stage[data-view="attention"] .peak { opacity: .9; }
+
+/* Radiologist's fracture boxes (held-out samples only) */
+.boxes { position: absolute; inset: 0; pointer-events: none; transition: opacity .3s; }
+.box {
+  position: absolute;
+  border: 1.5px dashed #fff;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.5);
+  animation: box-in .5s var(--ease) both;
+}
+.stage[data-view="input"] .boxes, .stage.no-boxes .boxes { opacity: 0; }
+
+.toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface);
+  padding: 6px 12px; font-size: 13px; color: var(--ink-3); cursor: pointer;
+  margin-right: auto;
+  transition: color .2s, border-color .2s;
+}
+.toggle[aria-pressed="true"] { color: var(--ink); border-color: var(--line-strong); }
+.toggle-swatch { width: 12px; height: 10px; border: 1.5px dashed currentColor; border-radius: 2px; }
+.toggle:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
 
 .scan {
   position: absolute; inset: 0;
@@ -322,7 +354,55 @@ h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.025em; font-weight: 
 .btn-primary:hover { opacity: .85; }
 .btn-primary:active { transform: scale(.99); }
 .btn-primary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.btn-secondary {
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .2s;
+}
+.btn-secondary:hover { border-color: var(--ink); }
+.btn-secondary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .disclaimer { margin: -14px 0 0; font-size: 11px; color: var(--ink-3); text-align: center; }
+
+/* ---------- Performance ---------- */
+.perf { flex: 1; display: flex; justify-content: center; padding: 6vh 24px 48px; overflow-y: auto; animation: fade-up .5s var(--ease) both; }
+.perf-inner { width: 100%; max-width: 760px; }
+.perf .lede { max-width: 62ch; margin-bottom: 24px; }
+.mono { font-family: var(--mono); }
+
+.strip { border: 1px solid var(--line); border-radius: 14px; padding: 14px 14px 6px; background: var(--surface); }
+.strip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.strip-svg { display: block; width: 100%; height: auto; cursor: ew-resize; touch-action: none; user-select: none; }
+.dot { fill: var(--ink-3); opacity: .3; transition: fill .15s, opacity .15s; }
+.dot.flagged { fill: var(--ink); opacity: .85; }
+.flag-zone { fill: var(--ink); opacity: .04; }
+.row-label { font-size: 12px; fill: var(--ink-2); font-weight: 500; }
+.axis { stroke: var(--line-strong); stroke-width: 1; }
+.tick { font: 10px var(--mono); fill: var(--ink-3); }
+.handle-line { stroke: var(--ink); stroke-width: 2; }
+.handle-tag { fill: var(--ink); }
+.handle-text { font: 500 11px var(--mono); fill: var(--bg); }
+.strip-svg.dragging .dot { transition: none; }
+
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0 36px; }
+.tile { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.tile-label { font-size: 12px; color: var(--ink-2); }
+.tile-value { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.tile-of { font-size: 15px; font-weight: 400; color: var(--ink-3); }
+.tile-sub { font-size: 12px; color: var(--ink-3); }
+
+.perf-bottom { display: grid; grid-template-columns: 260px 1fr; gap: 32px; align-items: start; }
+.roc-svg { display: block; width: 100%; height: auto; }
+.grid { stroke: var(--line); stroke-width: 1; }
+.diagonal { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 4; }
+.roc-line { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
+.roc-dot { fill: var(--ink); stroke: var(--bg); stroke-width: 2; }
+.axis-label { font-size: 11px; fill: var(--ink-2); }
+.perf-notes p { color: var(--ink-2); margin: 0 0 12px; max-width: 52ch; }
+.perf-notes strong { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 
 /* ---------- Overlays ---------- */
 .drag-overlay {
@@ -349,6 +429,7 @@ h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.025em; font-weight: 
 @keyframes fade-up { from { opacity: 0; transform: translateY(8px); } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes scan { to { top: 100%; } }
+@keyframes box-in { from { opacity: 0; transform: scale(1.3); } }
 @keyframes ring { from { transform: scale(1); opacity: .9; } to { transform: scale(2.2); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
@@ -368,4 +449,10 @@ h1 { font-size: 30px; line-height: 1.15; letter-spacing: -0.025em; font-weight: 
   .upload { padding: 40px 16px; }
   .file-meta { display: none; }
   .sample-grid { grid-template-columns: repeat(4, 1fr); }
+  .nav { margin-left: 8px; }
+  .status { display: none; }
+  .perf { padding: 32px 16px; }
+  .tiles { grid-template-columns: 1fr; gap: 8px; }
+  .perf-bottom { grid-template-columns: 1fr; }
+  .roc { max-width: 300px; }
 }

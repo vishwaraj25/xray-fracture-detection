@@ -52,25 +52,28 @@ class GradCAM:
         return cam / (cam.max() + 1e-8), torch.sigmoid(logit).item()
 
 
-def fracture_boxes(image_id, original_shape):
-    """YOLO boxes (normalised to the original image) mapped into the square model input."""
+def annotated_boxes(image_id):
+    """Radiologists' fracture boxes as (x, y, w, h), normalised to the original image."""
     path = RAW_DIR / "Annotations" / "YOLO" / image_id.replace(".jpg", ".txt")
     if not path.exists():
         return []
+    boxes = []
+    for line in path.read_text().split("\n"):
+        if line.strip():
+            _, cx, cy, bw, bh = map(float, line.split())
+            boxes.append((cx - bw / 2, cy - bh / 2, bw, bh))
+    return boxes
+
+
+def fracture_boxes(image_id, original_shape):
+    """Annotated boxes mapped into the square model input, in pixels."""
     h, w = original_shape
     scale = LOAD_SIZE / max(h, w)
     new_w, new_h = round(w * scale), round(h * scale)
     left, top = (LOAD_SIZE - new_w) // 2, (LOAD_SIZE - new_h) // 2
     to_input = CNN_IMAGE_SIZE / LOAD_SIZE
-    boxes = []
-    for line in path.read_text().split("\n"):
-        if not line.strip():
-            continue
-        _, cx, cy, bw, bh = map(float, line.split())
-        x0 = (left + (cx - bw / 2) * new_w) * to_input
-        y0 = (top + (cy - bh / 2) * new_h) * to_input
-        boxes.append((x0, y0, bw * new_w * to_input, bh * new_h * to_input))
-    return boxes
+    return [((left + x * new_w) * to_input, (top + y * new_h) * to_input, bw * new_w * to_input, bh * new_h * to_input)
+            for x, y, bw, bh in annotated_boxes(image_id)]
 
 
 def hit(cam, boxes, margin):

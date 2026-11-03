@@ -12,6 +12,10 @@
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M9 23 L14 9 L18 17 L23 13"/></svg>
       <span class="brand-name">Fracture Analysis</span>
+      <nav class="nav" aria-label="Sections">
+        <button id="nav-analyse" aria-current="page">Analyse</button>
+        <button id="nav-performance">Performance</button>
+      </nav>
     </div>
     <div class="status" id="status">
       <span class="status-dot" aria-hidden="true"></span>
@@ -52,6 +56,7 @@
             <img id="img-original" alt="Uploaded X-ray">
             <img id="img-attention" class="layer" alt="">
             <img id="img-input" class="layer" alt="Model input">
+            <div class="boxes" id="boxes"></div>
             <div class="peak" id="peak" hidden></div>
             <div class="scan" id="scan"></div>
           </div>
@@ -66,6 +71,9 @@
             <button role="tab" data-view="attention" aria-selected="false" disabled>Attention</button>
             <button role="tab" data-view="input" aria-selected="false" disabled>Model input</button>
           </div>
+          <button class="toggle" id="toggle-boxes" aria-pressed="true" hidden>
+            <span class="toggle-swatch" aria-hidden="true"></span>Radiologist box
+          </button>
           <span class="file-meta" id="file-meta"></span>
         </div>
       </div>
@@ -93,6 +101,7 @@
             <div><dt>Score</dt><dd id="score"></dd></div>
             <div><dt>Threshold</dt><dd id="threshold"></dd></div>
             <div id="reference-row" hidden><dt>Reference label</dt><dd id="reference"></dd></div>
+            <div id="focus-row" hidden><dt>Model's focus</dt><dd id="focus"></dd></div>
           </dl>
         </div>
 
@@ -109,6 +118,43 @@
 
         <p class="disclaimer">Research prototype. Not a medical device and not for diagnostic use.</p>
       </aside>
+    </section>
+
+    <!-- Performance -->
+    <section class="perf" id="performance-view" hidden>
+      <div class="perf-inner">
+        <h1>How well it works</h1>
+        <p class="lede">Every dot is one of <span id="perf-total"></span> test X-rays the model never saw, placed by its fracture score.
+          Drag the threshold: moving it left catches more fractures but raises more false alarms.</p>
+
+        <div class="strip" id="strip" tabindex="0" role="slider" aria-label="Decision threshold"
+             aria-valuemin="0" aria-valuemax="1"></div>
+
+        <div class="tiles">
+          <div class="tile"><div class="tile-label">Fractures caught</div>
+            <div class="tile-value"><span id="perf-caught"></span><span class="tile-of" id="perf-caught-of"></span></div>
+            <div class="tile-sub" id="perf-sens"></div></div>
+          <div class="tile"><div class="tile-label">False alarms</div>
+            <div class="tile-value"><span id="perf-fp"></span><span class="tile-of" id="perf-fp-of"></span></div>
+            <div class="tile-sub" id="perf-spec"></div></div>
+          <div class="tile"><div class="tile-label">Flags that are real fractures</div>
+            <div class="tile-value"><span id="perf-ppv"></span></div>
+            <div class="tile-sub" id="perf-flagged"></div></div>
+        </div>
+
+        <div class="perf-bottom">
+          <div class="roc" id="roc"></div>
+          <div class="perf-notes">
+            <div class="eyebrow">ROC curve</div>
+            <p>Each point on the curve is one threshold: how many fractures are caught (up) against how many normal
+              X-rays are flagged (right). The dot is the current threshold. A useless model follows the dashed diagonal;
+              the area under the curve is <strong id="perf-auc"></strong> (0.5 = guessing, 1 = perfect).</p>
+            <p>The default threshold, <span class="mono" id="perf-chosen"></span>, was chosen on separate validation
+              images so that, with 95% confidence, at least 85% of fractures are caught.</p>
+            <button class="btn-secondary" id="perf-reset" hidden>Reset to chosen threshold</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <div class="toast" id="toast" role="alert" hidden></div>

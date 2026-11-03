@@ -55,3 +55,30 @@ def test_analyze_endpoint_end_to_end():
 
     bad = client.post("/api/analyze", files={"file": ("x.txt", b"hello", "text/plain")})
     assert bad.status_code == 422
+
+
+PREDICTIONS_READY = (SRC.parent / "reports" / "predictions" / "cnn.csv").exists()
+
+
+@pytest.mark.skipif(not (MODEL_READY and PREDICTIONS_READY), reason="trained CNN or predictions not available")
+def test_performance_endpoint_matches_test_split():
+    from fastapi.testclient import TestClient
+
+    from app import app
+
+    body = TestClient(app).get("/api/performance").json()
+    assert len(body["fractured"]) + len(body["normal"]) == 627
+    caught = sum(s >= body["threshold"] for s in body["fractured"])
+    assert 0 < caught <= len(body["fractured"])
+    assert 0.5 < body["roc_auc"] <= 1
+
+
+def test_annotated_boxes_are_normalised(tmp_path, monkeypatch):
+    import explain
+
+    (tmp_path / "Annotations" / "YOLO").mkdir(parents=True)
+    (tmp_path / "Annotations" / "YOLO" / "IMG1.txt").write_text("0 0.5 0.5 0.2 0.4\n")
+    monkeypatch.setattr(explain, "RAW_DIR", tmp_path)
+    (x, y, w, h), = explain.annotated_boxes("IMG1.jpg")
+    assert (round(x, 6), round(y, 6), w, h) == (0.4, 0.3, 0.2, 0.4)
+    assert explain.annotated_boxes("missing.jpg") == []

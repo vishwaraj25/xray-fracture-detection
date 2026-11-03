@@ -107,6 +107,10 @@ A minimal black-and-white interface for analysing one X-ray:
 - The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
   384×384 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
 - For X-rays without a suspected fracture, the attention map is faded and no peak is marked.
+- For the test samples, the radiologist's fracture box is drawn over the image (key `b` toggles it), and the panel
+  says whether the model's attention peak landed on the fracture: the same check as `reports/gradcam.md`.
+- The **Performance** page plots all 627 test X-rays by score. Dragging the threshold updates the fractures caught,
+  false alarms and the point on the ROC curve live.
 - Images are processed in memory on the local machine and never saved.
 
 ## Project structure

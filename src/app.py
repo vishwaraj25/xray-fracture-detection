@@ -15,7 +15,11 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from config import BASE_DIR, IMAGES_DIR, METADATA_PATH, RAW_DIR
+from sklearn.metrics import roc_auc_score
+
+from config import BASE_DIR, IMAGES_DIR, METADATA_PATH, PREDICTIONS_DIR, RAW_DIR
+from evaluate import validation_threshold
+from explain import annotated_boxes
 from predict import FractureAnalyzer
 
 STATIC_DIR = BASE_DIR / "src" / "static"
@@ -50,8 +54,23 @@ def samples():
             "file": row["image_id"],
             "thumb": row["path"],
             "label": "Fractured" if row["fractured"] else "Not fractured",
+            "boxes": [dict(zip("xywh", box)) for box in annotated_boxes(row["image_id"])],
         }
         for row in picks
+    }
+
+
+@lru_cache(maxsize=1)
+def performance():
+    """CNN scores on the test split, so the UI can recompute metrics at any threshold."""
+    preds = pd.read_csv(PREDICTIONS_DIR / "cnn.csv")
+    test = preds[preds["split"] == "test"]
+    scores = lambda label: sorted(round(float(s), 4) for s in test.loc[test["y_true"] == label, "score"])  # noqa: E731
+    return {
+        "threshold": float(validation_threshold(preds)),
+        "roc_auc": float(roc_auc_score(test["y_true"], test["score"])),
+        "fractured": scores(1),
+        "normal": scores(0),
     }
 
 
@@ -67,7 +86,15 @@ def info():
 
 @app.get("/api/samples")
 def list_samples():
-    return [{"id": key, "region": s["region"], "label": s["label"]} for key, s in samples().items()]
+    return [{"id": key, "region": s["region"], "label": s["label"], "boxes": s["boxes"]}
+            for key, s in samples().items()]
+
+
+@app.get("/api/performance")
+def test_performance():
+    if not (PREDICTIONS_DIR / "cnn.csv").exists():
+        raise HTTPException(404, "No test predictions; run evaluate.py")
+    return performance()
 
 
 @app.get("/api/samples/{sample_id}/thumb")

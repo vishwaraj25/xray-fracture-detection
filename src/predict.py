@@ -87,6 +87,8 @@ class FractureAnalyzer:
                 "sensitivity": float(m["sensitivity"]),
                 "specificity": float(m["specificity"]),
             },
+            # Size of one Grad-CAM cell as a fraction of the square input, for the UI's pointing check
+            "cam_cell": CAM_CELL / CNN_IMAGE_SIZE,
             "device": str(self.device),
         }
 
