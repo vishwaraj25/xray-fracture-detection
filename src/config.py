@@ -5,6 +5,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Data
 RAW_DIR = BASE_DIR / "data" / "raw" / "FracAtlas"
+# External test set from another hospital, never used for training (external_validation.py)
+EXTERNAL_DIR = BASE_DIR / "data" / "raw" / "GRAZPEDWRI-DX"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 IMAGES_DIR = PROCESSED_DIR / "images"
 METADATA_PATH = PROCESSED_DIR / "metadata.csv"

@@ -88,3 +88,13 @@ def test_confident_threshold_is_more_conservative():
     caught = (scores[y == 1] >= confident).sum()
     assert sensitivity_lower_bound(caught, 110, 0.95) >= 0.85
     assert sensitivity_lower_bound(caught - 1, 110, 0.95) < 0.85
+
+
+def test_external_png_is_windowed_to_8_bit():
+    from external_validation import decode_png
+
+    image = np.linspace(1000, 5000, 64 * 32).reshape(64, 32).astype(np.uint16)
+    ok, data = cv2.imencode(".png", image)
+    gray = decode_png(data.tobytes(), "test.png")
+    assert gray.dtype == np.uint8 and gray.shape == (64, 32)
+    assert gray.min() == 0 and gray.max() == 255

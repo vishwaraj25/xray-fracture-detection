@@ -31,6 +31,7 @@ X-ray → build_dataset → preprocessing → feature_extraction → train_svm �
 | SVM | `train_svm.py` | Scaler → PCA → RBF SVM, tuned with grouped 5-fold cross-validation |
 | CNN | `train_cnn.py` | ImageNet ResNet-18 at 384 px, augmentation, class-weighted loss, early stopping on validation |
 | Evaluation | `evaluate.py` | Test metrics with confidence intervals, threshold chosen on validation → `reports/results.md` |
+| External test | `external_validation.py` | Scores the CNN on X-rays from another hospital, never used for anything else → `reports/external.md` |
 | Explanation | `explain.py` | Grad-CAM heatmaps scored against the radiologists' boxes → `reports/gradcam.md` |
 | Prediction | `predict.py`, `app.py` | Command line and web app |
 
@@ -65,6 +66,28 @@ alarms out of 516 normal X-rays. Full table, curves and per-region results: [rep
 
 ![Grad-CAM](reports/figures/gradcam.png)
 
+### External validation: a different hospital
+
+To check whether the CNN works beyond FracAtlas, it was scored without retraining on 5,031 wrist X-rays
+of 1,499 children from Graz, Austria ([GRAZPEDWRI-DX](https://doi.org/10.6084/m9.figshare.14825193), part 1 of 4).
+The threshold stayed at the FracAtlas value.
+
+| Set | X-rays | ROC-AUC [95% CI] | Sensitivity | Specificity |
+|---|---|---|---|---|
+| FracAtlas test, hand (same hospitals as training) | 210 | 0.837 | 0.80 | 0.69 |
+| **Graz, first visit, no cast or metal** | 2,574 | **0.673 [0.65–0.69]** | 0.72 | 0.47 |
+| Graz, X-rays with a cast | 1,430 | 0.540 | 1.00 | 0.02 |
+
+5. **The model does not transfer well to a new hospital.** ROC-AUC drops from 0.84 to 0.67, and specificity
+   halves: at the same threshold, more than half of normal Graz wrists are flagged. The drop is not caused by
+   the 16-bit image conversion (rescoring with a different conversion gives the same AUC). Likely causes are
+   children's open growth plates, which look like fracture lines, and different scanners. **Casts act as a
+   shortcut**, like implants in FracAtlas: almost every X-ray with a cast is flagged, fractured or not.
+   Across all Graz images the AUC is 0.81, but only because casts and follow-up visits make the task easier.
+   Full report: [reports/external.md](reports/external.md).
+
+![External ROC](reports/figures/external_curves.png)
+
 ### Decision threshold
 
 A score above the threshold means "fracture". The threshold is set on the validation split as the highest value at
@@ -90,6 +113,7 @@ pip install -r requirements.txt
 python src/run_pipeline.py              # every stage in order (about 1.5 hours on an Apple M2)
 python src/run_pipeline.py --skip-cnn   # reuse a trained CNN (a few minutes)
 
+python src/external_validation.py      # optional: needs GRAZPEDWRI-DX (see data/README.md)
 python src/predict.py path/to/xray.jpg [--model svm]
 python src/app.py                       # web app on http://127.0.0.1:8000
 pytest tests
@@ -125,8 +149,9 @@ models/         svm.joblib and cnn.pt (git-ignored; recreate with run_pipeline.p
 
 ## Limitations
 
-- **Only tested on FracAtlas.** It has not been checked on X-rays from other hospitals or scanners
-  (for example MURA or GRAZPEDWRI-DX), which is where medical models most often fail.
+- **It does not generalise well yet.** On another hospital's (paediatric wrist) X-rays the AUC falls to 0.67.
+  Training on more varied data, such as other Graz patients, is the obvious next step; that would need yet
+  another unseen dataset to test on.
 - **No patient IDs.** Near-duplicate grouping reduces leakage between splits but cannot rule it out.
 - **Small subgroups.** The test set has only 3 shoulder and 6 hip fractures, so those per-region scores are uncertain.
 - **One training run.** The CNN was trained once; a different random seed would give somewhat different numbers.
