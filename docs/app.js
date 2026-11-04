@@ -7,20 +7,29 @@ const STEPS = [
   { key: "explain", label: "Where it looked" },
   { key: "decide", label: "Estimate" },
 ];
-const STEP_PACE_MS = 380;
+const STEP_PACE_MS = 320;
 const CHECK_SVG = '<svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.5 9.5 3.8"/></svg>';
+const LEVELS = ["unlikely", "possible", "likely"];
 
-// Measured once in the project's reports (graz.md, gradcam.md, results.md); not in data.json
+// Measured once in the project's reports (graz.md, gradcam.md); not in data.json
 const GRAZ_AUC = 0.976;
 const CAM_HIT_RATE = 0.61;
 
 // What a radiologist is asked to do next, per level. Never a diagnosis.
 const NEXT_STEP = {
-  likely: "Prioritise this image for radiologist review. Start with the highlighted region, but read the whole " +
-    "image: the model's attention can fall away from a fracture.",
-  possible: "Radiologist review recommended. The model is uncertain, and a fracture may lie outside the " +
-    "highlighted region.",
-  unlikely: "No region flagged. Read as usual: a low score does not exclude a fracture.",
+  likely: {
+    short: "Prioritise radiologist review",
+    long: "Prioritise this image for radiologist review. Start with the highlighted region, but read the whole " +
+      "image: the model's attention can fall away from a fracture.",
+  },
+  possible: {
+    short: "Radiologist review recommended",
+    long: "Radiologist review recommended. The model is uncertain, and a fracture may lie outside the highlighted region.",
+  },
+  unlikely: {
+    short: "Routine reading",
+    long: "No region flagged. Read as usual: a low score does not exclude a fracture.",
+  },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -29,19 +38,17 @@ const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "
 
 const els = {
   status: $("status"), statusText: $("status-text"),
-  upload: $("upload-view"), analysis: $("analysis-view"), reportView: $("report-view"), report: $("report"),
+  upload: $("upload-view"), analysis: $("analysis-view"),
   dropzone: $("dropzone"), fileInput: $("file-input"),
   samples: $("samples"), sampleGrid: $("sample-grid"),
   stage: $("stage"), viewerEmpty: $("viewer-empty"),
   original: $("img-original"), attention: $("img-attention"), input: $("img-input"),
   peak: $("peak"), fileMeta: $("file-meta"),
-  steps: $("steps"), result: $("result"), finding: $("finding"), note: $("note"),
-  scale: $("scale"), evidence: $("evidence"), limits: $("limits"),
-  score: $("score"), threshold: $("threshold"),
-  referenceRow: $("reference-row"), reference: $("reference"),
-  focusRow: $("focus-row"), focus: $("focus"),
+  progress: $("progress"), steps: $("steps"),
+  result: $("result"), stamp: $("stamp"), finding: $("finding"), meter: $("meter"), note: $("note"),
+  keyFacts: $("key-facts"), details: $("details"),
+  printHead: $("print-head"), printFigures: $("print-figures"),
   boxes: $("boxes"), toggleBoxes: $("toggle-boxes"),
-  panelActions: $("panel-actions"),
   toast: $("toast"), dragOverlay: $("drag-overlay"),
   tabs: [...document.querySelectorAll(".segmented button")],
 };
@@ -49,8 +56,6 @@ const els = {
 let modelInfo = null;
 let runId = 0;
 let objectUrl = null;
-// The last finished analysis, for the report
-let last = null;
 
 /* ---------- Startup ---------- */
 
@@ -66,7 +71,6 @@ async function init() {
     els.statusText.textContent = "Could not load the demo data";
     return;
   }
-  showFacts();
   loadSamples();
   // The model is ~22 MB: download it in the background while the visitor looks around
   modelReady = WebModel.load((p) => { els.statusText.textContent = `Loading model ${Math.round(p * 100)}%`; })
@@ -88,15 +92,6 @@ function testCounts() {
   const caught = fractured.filter((s) => s >= threshold).length;
   const falseAlarms = normal.filter((s) => s >= threshold).length;
   return { P: fractured.length, N: normal.length, caught, falseAlarms };
-}
-
-function showFacts() {
-  const t = modelInfo.test;
-  const fact = (value, text) => `<div><dt>${value}</dt><dd>${text}</dd></div>`;
-  $("facts").innerHTML =
-    fact(t.roc_auc.toFixed(2), `ROC-AUC on ${t.images} held-out X-rays (1.0 is perfect, 0.5 is chance)`) +
-    fact(pct(t.sensitivity), `of fractures flagged in that test, with ${pct(t.specificity)} of healthy X-rays cleared`) +
-    fact("2", "public datasets: FracAtlas (Bangladesh) and GRAZPEDWRI-DX (Austria)");
 }
 
 function loadSamples() {
@@ -166,6 +161,7 @@ async function analyze(file, sample = null) {
   const id = ++runId;
   resetAnalysis();
   showView("analysis");
+  els.analysis.scrollTop = 0;
   els.fileMeta.textContent = `${file.name} · ${formatBytes(file.size)}`;
 
   if (file.type.startsWith("image/")) {
@@ -198,14 +194,14 @@ async function analyze(file, sample = null) {
     if (id !== runId) return;
     const info = data.steps.find((s) => s.key === STEPS[i].key);
     setStep(i, "active");
-    await sleep(i === 0 ? 120 : STEP_PACE_MS * 0.6);
+    await sleep(i === 0 ? 100 : STEP_PACE_MS * 0.6);
     setStep(i, "done", info);
     await onStepDone(STEPS[i].key, data, sample);
     await sleep(STEP_PACE_MS * 0.4);
   }
   if (id !== runId) return;
-  last = { data, sample, name: file.name, bytes: file.size, at: new Date() };
-  showResult(data, sample);
+  const totalMs = data.steps.reduce((sum, s) => sum + s.ms, 0);
+  await showResult({ data, sample, name: file.name, bytes: file.size, at: new Date(), totalMs });
 }
 
 async function onStepDone(key, data, sample) {
@@ -229,36 +225,143 @@ async function onStepDone(key, data, sample) {
   }
 }
 
-function showResult(data, sample) {
+/* ---------- Result: summary first ---------- */
+
+async function showResult(run) {
+  const { data, sample, totalMs } = run;
+  els.progress.hidden = true;
   els.result.hidden = false;
   els.result.dataset.level = data.level;
+  els.stamp.textContent = `${(totalMs / 1000).toFixed(1)} s · on this device`;
   els.finding.textContent = data.finding;
   els.note.textContent = data.confidence_note;
-  els.score.textContent = data.score.toFixed(3);
-  els.threshold.textContent = data.threshold.toFixed(3);
-  for (const li of els.scale.children) li.classList.toggle("on", li.dataset.level === data.level);
-  els.evidence.textContent = levelEvidence(data.level);
-  const t = modelInfo.test;
-  els.limits.textContent = `In testing it flagged ${pct(t.sensitivity)} of fractures and cleared ` +
-    `${pct(t.specificity)} of healthy X-rays. Not validated for clinical use.`;
+  renderMeter(data);
 
-  els.referenceRow.hidden = !sample;
-  if (sample) els.reference.textContent = sample.label;
-  if (sample?.boxes.length) {
-    els.focus.textContent = focusText(data, sample);
-    els.focusRow.hidden = false;
-  }
-  els.panelActions.hidden = false;
+  const facts = [
+    ["Region to check", data.positive ? regionText(data.peak) : "None flagged"],
+    ["Suggested next step", NEXT_STEP[data.level].short],
+    ["In testing", `${modelInfo.levels[data.level]} of 100 rated "${data.level}" had a fracture`],
+  ];
+  if (sample) facts.push(["Radiologist label", sample.label]);
+  els.keyFacts.innerHTML = facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(v)}</dd></div>`).join("");
+
+  els.details.innerHTML = detailCards(run);
+  els.details.hidden = false;
+  els.printHead.innerHTML = printHead(run);
+  els.printFigures.innerHTML = `
+    <figure><img src="${data.images.original}" alt="Original X-ray"><figcaption>Original image</figcaption></figure>
+    <figure><img src="${await annotatedImage(data, sample)}" alt="X-ray with the model's attention map">
+      <figcaption>Where the model looked (Grad-CAM)${sample?.boxes.length ? "; dashed box: radiologist's annotation" : ""}.
+      Not an outline of a fracture.</figcaption></figure>`;
 }
 
-function levelEvidence(level) {
-  const per100 = modelInfo.levels?.[level];
-  return per100 == null ? "" : `In testing, of 100 X-rays rated "${level}", about ${per100} had a fracture.`;
+// Three equal zones, like a lab report's reference range; the marker sits inside the zone of this score
+function renderMeter(data) {
+  const t = data.threshold, likely = modelInfo.likely_score;
+  const s = data.score;
+  const pos = s < t ? (s / t) / 3 : s < likely ? 1 / 3 + ((s - t) / (likely - t)) / 3 : 2 / 3 + ((s - likely) / (1 - likely)) / 3;
+  els.meter.setAttribute("aria-label", `Score ${s.toFixed(3)}: ${data.level}`);
+  els.meter.innerHTML = `
+    <div class="meter-track">${LEVELS.map((l) => `<span class="meter-zone${l === data.level ? " on" : ""}"></span>`).join("")}
+      <span class="meter-marker" style="left:${(Math.min(Math.max(pos, 0.01), 0.99) * 100).toFixed(1)}%"></span></div>
+    <div class="meter-labels">${LEVELS.map((l) => `<span class="${l === data.level ? "on" : ""}">${capitalise(l)}</span>`).join("")}</div>`;
+}
+
+/* ---------- Result: segmented details ---------- */
+
+function detailCards({ data, sample, name, bytes, at }) {
+  const t = modelInfo.test;
+  const c = testCounts();
+  const missedPer100 = Math.round((1 - c.caught / c.P) * 100);
+  const ppv = c.caught / (c.caught + c.falseAlarms);
+  const kv = (rows) => `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  const card = (title, body, wide = false) =>
+    `<section class="card${wide ? " wide" : ""}"><h2>${title}</h2>${body}</section>`;
+
+  return [
+    card("What the model found", kv([
+      ["Estimate", escapeHtml(data.finding)],
+      ["Model score", `<span class="mono">${data.score.toFixed(3)}</span> on a 0 to 1 scale`],
+      ["Flagged at", `<span class="mono">${data.threshold.toFixed(3)}</span> or above`],
+      ["Highlighted region", data.positive ? `${regionText(data.peak)}, as displayed` : "None"],
+      ...(sample?.boxes.length ? [["Peak vs annotation", focusText(data, sample)]] : []),
+    ])),
+    card("Suggested next step", `<p>${NEXT_STEP[data.level].long}</p>`),
+    card("What the model reviewed", `<ul>
+      <li>This single image, converted to grayscale and resized to 384 × 384 pixels.</li>
+      <li>The image and its mirror image; the two scores are averaged.</li>
+      <li>No patient history, symptoms, other views or previous studies.</li></ul>`),
+    card("How it was evaluated", `<ul>
+      <li>${t.images} held-out X-rays (${c.P} fractured): ROC-AUC ${t.roc_auc.toFixed(2)}, ${c.caught} of ${c.P}
+        fractures flagged, ${pct(1 - c.falseAlarms / c.N)} of healthy X-rays cleared.</li>
+      <li>Held-out patients from a second dataset (children's wrists, Graz): ROC-AUC ${GRAZ_AUC.toFixed(2)}.
+        Other patients from that hospital were used in training.</li>
+      <li>Cut-off chosen on separate validation images: 95% confidence of flagging at least 85% of fractures.</li></ul>`),
+    card("Limitations", `<ul class="cols">
+      <li>Not validated in clinical use, or at any hospital outside its training data.</li>
+      <li>In testing it missed about ${missedPer100} in 100 fractures. A low score does not exclude a fracture.</li>
+      <li>Many flags are false alarms: about ${pct(ppv)} of flagged test X-rays had a fracture.</li>
+      <li>Casts and metal implants can raise the score whether or not a fracture is present.</li>
+      <li>The heat map is coarse (32-pixel cells). Its peak was near the annotated fracture in about
+        ${pct(CAM_HIT_RATE)} of the fractures it flagged.</li>
+      <li>Few hip and shoulder fractures were tested, so results there are less certain.</li></ul>
+      <p class="card-link"><a href="model.html">Full model details</a></p>`, true),
+    card("Study", kv([
+      ["Image", `<span class="mono">${escapeHtml(name)}</span>`],
+      ["Size", `${data.size.width} × ${data.size.height} px · ${formatBytes(bytes)}`],
+      ["Body region", sample ? `${capitalise(sample.region)} (dataset label)` : "Not provided"],
+      ["Source", sample ? "Held-out FracAtlas test image" : "Uploaded on this device, not stored"],
+      ["Analysed", escapeHtml(at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }))],
+      ["Model", `${escapeHtml(modelInfo.model)}, trained on ${escapeHtml(modelInfo.dataset)}`],
+    ]), true),
+  ].join("");
+}
+
+function printHead({ at }) {
+  const two = (n) => String(n).padStart(2, "0");
+  const id = `FS-${at.getFullYear()}${two(at.getMonth() + 1)}${two(at.getDate())}-${two(at.getHours())}${two(at.getMinutes())}`;
+  return `
+    <div><div class="eyebrow">AI-assisted fracture screening · research prototype</div><h1>Screening report</h1></div>
+    <div class="print-id">${id}<br>${escapeHtml(at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }))}</div>
+    <p class="print-warning"><strong>Not a diagnosis.</strong> This estimate comes from a research model that has not
+      been clinically validated. It supports, and never replaces, review by a qualified radiologist.</p>`;
 }
 
 function focusText(data, sample) {
   if (!data.positive) return "Not flagged: a miss";
-  return focusOnBox(data, sample.boxes) ? "Yes, peak on the annotated region" : "No, peak outside the annotated region";
+  return focusOnBox(data, sample.boxes) ? "Peak on the annotated region" : "Peak outside the annotated region";
+}
+
+// Where the attention peak sits, in thirds of the image as displayed (not the patient's left or right)
+function regionText(peak) {
+  const col = peak.x < 1 / 3 ? "left" : peak.x > 2 / 3 ? "right" : "centre";
+  const row = peak.y < 1 / 3 ? "upper" : peak.y > 2 / 3 ? "lower" : "middle";
+  return row === "middle" && col === "centre" ? "Centre of the image" : `${capitalise(row)} ${col} of the image`;
+}
+
+// The original, dimmed, with the heat map, the peak ring and any radiologist boxes drawn on top
+async function annotatedImage(data, sample) {
+  const [base, heat] = await Promise.all([loadImage(data.images.original), loadImage(data.images.attention)]);
+  const canvas = Object.assign(document.createElement("canvas"), { width: base.width, height: base.height });
+  const ctx = canvas.getContext("2d");
+  ctx.filter = "brightness(0.55)";
+  ctx.drawImage(base, 0, 0);
+  ctx.filter = "none";
+  ctx.drawImage(heat, 0, 0, base.width, base.height);
+  const unit = Math.max(base.width, base.height);
+  ctx.strokeStyle = "#fff";
+  if (data.positive) {
+    ctx.lineWidth = Math.max(2, unit / 300);
+    ctx.beginPath();
+    ctx.arc(data.peak.x * base.width, data.peak.y * base.height, unit * 0.045, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  for (const b of sample?.boxes ?? []) {
+    ctx.setLineDash([unit / 90, unit / 140]);
+    ctx.lineWidth = Math.max(1.5, unit / 400);
+    ctx.strokeRect(b.x * base.width, b.y * base.height, b.w * base.width, b.h * base.height);
+  }
+  return canvas.toDataURL("image/jpeg", 0.92);
 }
 
 /* ---------- Steps ---------- */
@@ -267,7 +370,7 @@ function renderSteps() {
   els.steps.innerHTML = STEPS.map((s) => `
     <li class="step">
       <span class="step-icon">${CHECK_SVG}</span>
-      <span><span class="step-label">${s.label}</span><span class="step-detail"></span></span>
+      <span class="step-label">${s.label}</span>
       <span class="step-ms"></span>
     </li>`).join("");
 }
@@ -276,10 +379,7 @@ function setStep(index, state, info) {
   const li = els.steps.children[index];
   li.classList.remove("active", "done");
   li.classList.add(state);
-  if (info) {
-    li.querySelector(".step-detail").textContent = info.detail;
-    li.querySelector(".step-ms").textContent = `${info.ms} ms`;
-  }
+  if (info) li.querySelector(".step-ms").textContent = `${info.ms} ms`;
 }
 
 /* ---------- Radiologist boxes ---------- */
@@ -313,12 +413,7 @@ els.toggleBoxes.addEventListener("click", () =>
 els.tabs.forEach((tab) => tab.addEventListener("click", () => setView(tab.dataset.view)));
 
 window.addEventListener("keydown", (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (!els.reportView.hidden) {
-    if (e.key === "Escape") showView("analysis");
-    return;
-  }
-  if (els.analysis.hidden) return;
+  if (els.analysis.hidden || e.metaKey || e.ctrlKey || e.altKey) return;
   const view = { 1: "image", 2: "attention", 3: "input" }[e.key];
   if (view && !els.tabs.find((t) => t.dataset.view === view).disabled) setView(view);
   if (e.key === "Escape") goHome();
@@ -338,12 +433,12 @@ function enableTab(view) {
 function showView(name) {
   els.upload.hidden = name !== "upload";
   els.analysis.hidden = name !== "analysis";
-  els.reportView.hidden = name !== "report";
 }
 
 /* ---------- Reset ---------- */
 
 $("new-analysis").addEventListener("click", goHome);
+$("save-report").addEventListener("click", () => window.print());
 
 function goHome() {
   runId++;
@@ -354,7 +449,6 @@ function goHome() {
 function resetAnalysis() {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
-  last = null;
   renderSteps();
   els.original.classList.remove("shown");
   els.original.removeAttribute("src");
@@ -363,169 +457,17 @@ function resetAnalysis() {
   els.peak.hidden = true;
   els.boxes.innerHTML = "";
   els.toggleBoxes.hidden = true;
-  els.focusRow.hidden = true;
   setBoxesVisible(true);
   els.viewerEmpty.hidden = false;
   els.stage.classList.remove("scanning", "dimmed");
+  els.progress.hidden = false;
   els.result.hidden = true;
-  els.panelActions.hidden = true;
+  els.details.hidden = true;
+  els.details.innerHTML = "";
+  els.printHead.innerHTML = "";
+  els.printFigures.innerHTML = "";
   els.tabs.forEach((t) => { t.disabled = t.dataset.view !== "image"; });
   setView("image");
-}
-
-/* ---------- Report ---------- */
-
-$("open-report").addEventListener("click", openReport);
-$("report-back").addEventListener("click", () => showView("analysis"));
-$("report-print").addEventListener("click", () => window.print());
-
-// Where the attention peak sits, in thirds of the image as displayed (not the patient's left or right)
-function regionText(peak) {
-  const col = peak.x < 1 / 3 ? "left" : peak.x > 2 / 3 ? "right" : "centre";
-  const row = peak.y < 1 / 3 ? "upper" : peak.y > 2 / 3 ? "lower" : "middle";
-  return row === "middle" && col === "centre" ? "Centre of the image" : `${capitalise(row)} ${col} of the image`;
-}
-
-// The original, dimmed, with the heat map, the peak ring and any radiologist boxes drawn on top
-async function annotatedImage(data, sample) {
-  const [base, heat] = await Promise.all([loadImage(data.images.original), loadImage(data.images.attention)]);
-  const canvas = Object.assign(document.createElement("canvas"), { width: base.width, height: base.height });
-  const ctx = canvas.getContext("2d");
-  ctx.filter = "brightness(0.55)";
-  ctx.drawImage(base, 0, 0);
-  ctx.filter = "none";
-  ctx.drawImage(heat, 0, 0, base.width, base.height);
-  const unit = Math.max(base.width, base.height);
-  if (data.positive) {
-    ctx.lineWidth = Math.max(2, unit / 300);
-    ctx.strokeStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(data.peak.x * base.width, data.peak.y * base.height, unit * 0.045, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  for (const b of sample?.boxes ?? []) {
-    ctx.setLineDash([unit / 90, unit / 140]);
-    ctx.lineWidth = Math.max(1.5, unit / 400);
-    ctx.strokeStyle = "#fff";
-    ctx.strokeRect(b.x * base.width, b.y * base.height, b.w * base.width, b.h * base.height);
-  }
-  return canvas.toDataURL("image/jpeg", 0.92);
-}
-
-async function openReport() {
-  if (!last) return;
-  const { data, sample, name, bytes, at } = last;
-  const t = modelInfo.test;
-  const c = testCounts();
-  const missedPer100 = Math.round((1 - c.caught / c.P) * 100);
-  const ppv = c.caught / (c.caught + c.falseAlarms);
-  const when = at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-  const two = (n) => String(n).padStart(2, "0");
-  const reportId = `FS-${at.getFullYear()}${two(at.getMonth() + 1)}${two(at.getDate())}-${two(at.getHours())}${two(at.getMinutes())}`;
-  const kv = (rows) => `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
-  const annotated = await annotatedImage(data, sample);
-
-  els.report.innerHTML = `
-    <header class="report-head">
-      <div>
-        <div class="report-kicker">AI-assisted fracture screening · research prototype</div>
-        <h1>Screening report</h1>
-      </div>
-      <dl class="report-meta"><dt>Report</dt><dd>${reportId}</dd><dt>Generated</dt><dd>${escapeHtml(when)}</dd></dl>
-    </header>
-    <p class="report-warning"><strong>Not a diagnosis.</strong> This estimate comes from a research model that has not
-      been clinically validated. It is meant to support, never replace, review by a qualified radiologist.</p>
-
-    <section>
-      <h2>1. Study</h2>
-      ${kv([
-        ["Image", `<span class="mono">${escapeHtml(name)}</span>`],
-        ["Size", `${data.size.width} × ${data.size.height} px · ${formatBytes(bytes)}`],
-        ["Body region", sample ? `${capitalise(sample.region)} (from the dataset label)` : "Not provided"],
-        ["Source", sample ? "Held-out FracAtlas test image, not used in training" : "Uploaded on this device, not stored"],
-      ])}
-    </section>
-
-    <section>
-      <h2>2. Model estimate</h2>
-      <p class="report-finding"><span class="level-mark" data-level="${data.level}"></span>${escapeHtml(data.finding)}</p>
-      <p>${escapeHtml(data.confidence_note)}</p>
-      <ol class="scale">${["unlikely", "possible", "likely"].map((l) =>
-        `<li class="${l === data.level ? "on" : ""}">${capitalise(l)}</li>`).join("")}</ol>
-      ${kv([
-        ["Model score", `<span class="mono">${data.score.toFixed(3)}</span> on a 0 to 1 scale; flagged at
-          <span class="mono">${data.threshold.toFixed(3)}</span> or above`],
-        ["What this level meant in testing", levelEvidence(data.level).replace("In testing, of", "Of")],
-        ["Highlighted region", data.positive ? `${regionText(data.peak)}, as displayed` : "None: no fracture suggested"],
-      ])}
-    </section>
-
-    <section>
-      <h2>3. Images</h2>
-      <div class="report-figures">
-        <figure><img src="${data.images.original}" alt="Original X-ray"><figcaption>Original image.</figcaption></figure>
-        <figure><img src="${annotated}" alt="X-ray with the model's attention map"><figcaption>Where the model looked
-          (Grad-CAM).${data.positive ? " Ring: strongest response." : ""}${sample?.boxes.length ? " Dashed box: radiologist's annotation." : ""}
-          This is not an outline of a fracture.</figcaption></figure>
-      </div>
-    </section>
-
-    <section>
-      <h2>4. Suggested review</h2>
-      <p>${NEXT_STEP[data.level]}</p>
-    </section>
-
-    ${sample ? `<section>
-      <h2>5. Reference for this test image</h2>
-      ${kv([
-        ["Radiologist label", sample.label],
-        ...(sample.boxes.length ? [["Attention vs annotation", focusText(data, sample)]] : []),
-      ])}
-    </section>` : ""}
-
-    <section>
-      <h2>${sample ? 6 : 5}. What the model reviewed, and how it was evaluated</h2>
-      <div class="report-cols">
-        <div>
-          <h3>Reviewed for this report</h3>
-          <ul>
-            <li>This single image, converted to grayscale and resized to 384 × 384 pixels.</li>
-            <li>The image and its mirror image; the two scores are averaged.</li>
-            <li>No patient history, symptoms, other views or previous studies.</li>
-          </ul>
-        </div>
-        <div>
-          <h3>Evaluated before release</h3>
-          <ul>
-            <li>${t.images} held-out FracAtlas X-rays (${c.P} fractured): ROC-AUC ${t.roc_auc.toFixed(2)},
-              ${c.caught} of ${c.P} fractures flagged, ${pct(1 - c.falseAlarms / c.N)} of healthy X-rays cleared.</li>
-            <li>Held-out patients from a second dataset (children's wrists, Graz): ROC-AUC ${GRAZ_AUC.toFixed(2)}.
-              Other patients from that hospital were used in training.</li>
-            <li>Cut-off chosen on separate validation images: 95% confidence of flagging at least 85% of fractures.</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <section>
-      <h2>${sample ? 7 : 6}. Limitations</h2>
-      <ul>
-        <li>Not validated in clinical use, or at any hospital outside its training data.</li>
-        <li>In testing it missed about ${missedPer100} in 100 fractures. A low score does not exclude a fracture.</li>
-        <li>Many flags are false alarms: about ${pct(ppv)} of flagged test X-rays had a fracture.</li>
-        <li>Casts and metal implants can raise the score whether or not a fracture is present.</li>
-        <li>The heat map is coarse (32-pixel cells). Its peak was near the annotated fracture in about
-          ${pct(CAM_HIT_RATE)} of the fractures it flagged.</li>
-        <li>Few hip and shoulder fractures were tested, so results there are less certain.</li>
-      </ul>
-    </section>
-
-    <footer class="report-foot">
-      <span>${escapeHtml(modelInfo.model)} · trained on ${escapeHtml(modelInfo.dataset)} · computed on this device</span>
-      <span>vishwaraj25.github.io/xray-fracture-detection</span>
-    </footer>`;
-  showView("report");
-  els.reportView.scrollTop = 0;
 }
 
 /* ---------- Helpers ---------- */

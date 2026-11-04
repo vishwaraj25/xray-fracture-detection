@@ -139,22 +139,22 @@ Each stage can also be run on its own, for example `python src/evaluate.py`.
 
 ## Web demo
 
-A minimal off-white and off-black site, in `docs/`, that runs the CNN in the browser with
+A minimal site in off-white with black text, in `docs/`, that runs the CNN in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/). It is plain static files, so it is hosted for free
 on GitHub Pages with no server. The model (22 MB, weights in half precision) downloads while you look around.
 
 - Click one of the 8 held-out examples, or drop, choose or paste your own JPEG or PNG.
 - The steps (open → prepare → score → where it looked → estimate) animate as they finish, each with its real timing.
-- The result is an estimate, never a diagnosis: one of three levels (fracture unlikely, possible or likely) with a
-  sentence on what it means, how often X-rays rated that way were really fractured in testing, and the model's test
-  limits. The raw score sits under "Technical details".
-- **View report** opens a short screening report to print or save as PDF: the study, the estimate, the original and
-  annotated images, a suggested review step, what the model reviewed, how it was evaluated, and its limitations.
+- The result is an estimate, never a diagnosis: one of three levels (fracture unlikely, possible or likely).
+- The result page is also the report. A summary card gives the answer first: the estimate, a meter showing where
+  the score falls (unlikely, possible, likely), one sentence on what it means, the region to check, a suggested
+  next step and how often that rating was right in testing. Segmented cards below cover what the model found,
+  what it reviewed, how it was evaluated and its limitations. **Save report as PDF** prints the page as a report.
 - The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
   384×384 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
 - For the examples, the radiologist's fracture box is drawn over the image (key `b` toggles it), and the panel says
   whether the model's attention peak landed on the fracture: the same check as `reports/gradcam.md`.
-- The **How it works** page (`model.html`) covers the data, the model, what was and was not evaluated, the results and
+- The **Model details** page (`model.html`) covers the data, the model, what was and was not evaluated, the results and
   the limitations. It plots all 627 test X-rays by score: dragging the threshold updates the fractures caught, false
   alarms and the point on the ROC curve live.
 

@@ -19,7 +19,7 @@
     </a>
     <nav class="nav" aria-label="Pages">
       <a href="./" aria-current="page">Analyse</a>
-      <a href="model.html">How it works</a>
+      <a href="model.html">Model details</a>
     </nav>
     <div class="status" id="status">
       <span class="status-dot" aria-hidden="true"></span>
@@ -31,120 +31,88 @@
     <!-- Home -->
     <section class="home" id="upload-view">
       <div class="home-inner">
-        <p class="kicker">Research prototype · runs in your browser</p>
-        <h1>Screen an X-ray for fractures, and see why.</h1>
-        <p class="lede">Upload an X-ray of a hand, leg, hip or shoulder. A ResNet-18 estimates how likely a fracture
-          is, shows where it looked, and writes a short report for a radiologist to review. It does not diagnose.
-          No image leaves your device.</p>
-
-        <dl class="stats" id="facts"></dl>
-
-        <div class="samples" id="samples" hidden>
-          <div class="section-head">
-            <h2>Try a held-out X-ray</h2>
-            <span class="muted">never seen in training · successes and failures</span>
-          </div>
-          <div class="sample-grid" id="sample-grid"></div>
-        </div>
+        <h1>Fracture screening for X-rays</h1>
+        <p class="lede">The model estimates how likely a fracture is and shows where it looked.</p>
 
         <label class="dropzone" id="dropzone" tabindex="0">
           <input type="file" id="file-input" accept="image/jpeg,image/png,image/*" hidden>
           <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-          <span class="drop-text"><strong>Drop your own X-ray</strong> or <span class="link">choose a file</span></span>
-          <span class="drop-meta">JPEG or PNG · you can also paste</span>
+          <span class="drop-text"><strong>Drop an X-ray</strong> or <span class="link">choose a file</span></span>
+          <span class="drop-meta">JPEG or PNG · stays on your device</span>
         </label>
 
-        <ol class="how">
-          <li><span class="how-n">01</span><strong>Screen</strong><span>The model scores the image and its mirror image.</span></li>
-          <li><span class="how-n">02</span><strong>Explain</strong><span>A heat map shows the region that drove the score.</span></li>
-          <li><span class="how-n">03</span><strong>Report</strong><span>A short summary to print or save as PDF.</span></li>
-        </ol>
+        <div class="samples" id="samples" hidden>
+          <div class="section-head"><h2>Or try an example</h2></div>
+          <div class="sample-grid" id="sample-grid"></div>
+        </div>
 
         <footer class="home-foot">
-          <span>Not a medical device. Not for diagnostic use.</span>
-          <span><a href="model.html">How it works</a> · <a href="https://github.com/vishwaraj25/xray-fracture-detection">Source on GitHub</a></span>
+          <span>Research prototype · not for diagnosis</span>
+          <a href="model.html">Model details</a>
         </footer>
       </div>
     </section>
 
-    <!-- Analysis -->
+    <!-- Result: the answer first, then the details, on one page that also prints as the report -->
     <section class="analysis" id="analysis-view" hidden>
-      <div class="viewer-col">
-        <div class="viewer" id="viewer">
-          <div class="stage" id="stage">
-            <img id="img-original" alt="Uploaded X-ray">
-            <img id="img-attention" class="layer" alt="">
-            <img id="img-input" class="layer" alt="Model input">
-            <div class="boxes" id="boxes"></div>
-            <div class="peak" id="peak" hidden></div>
-            <div class="scan" id="scan"></div>
+      <div class="result-page">
+        <header class="print-head" id="print-head"></header>
+
+        <div class="result-top">
+          <div class="viewer-card">
+            <div class="viewer" id="viewer">
+              <div class="stage" id="stage">
+                <img id="img-original" alt="Uploaded X-ray">
+                <img id="img-attention" class="layer" alt="">
+                <img id="img-input" class="layer" alt="Model input">
+                <div class="boxes" id="boxes"></div>
+                <div class="peak" id="peak" hidden></div>
+                <div class="scan" id="scan"></div>
+              </div>
+              <div class="viewer-empty" id="viewer-empty">
+                <div class="spinner"></div>
+              </div>
+            </div>
+            <div class="toolbar">
+              <div class="segmented" role="tablist" aria-label="View">
+                <button role="tab" data-view="image" aria-selected="true">Original</button>
+                <button role="tab" data-view="attention" aria-selected="false" disabled>Where it looked</button>
+                <button role="tab" data-view="input" aria-selected="false" disabled>Model input</button>
+              </div>
+              <button class="toggle" id="toggle-boxes" aria-pressed="true" hidden>
+                <span class="toggle-swatch" aria-hidden="true"></span>Radiologist box
+              </button>
+              <span class="file-meta" id="file-meta"></span>
+            </div>
+            <div class="print-figures" id="print-figures"></div>
           </div>
-          <div class="viewer-empty" id="viewer-empty">
-            <div class="spinner"></div>
-          </div>
+
+          <aside class="summary">
+            <div class="progress" id="progress">
+              <div class="eyebrow">Analysing</div>
+              <ol class="steps" id="steps"></ol>
+            </div>
+
+            <div class="summary-body" id="result" hidden>
+              <div class="summary-head">
+                <span class="eyebrow">Result</span>
+                <span class="stamp" id="stamp"></span>
+              </div>
+              <div class="finding" id="finding"></div>
+              <div class="meter" id="meter" role="img"></div>
+              <p class="note" id="note"></p>
+              <dl class="key-facts" id="key-facts"></dl>
+              <p class="fineprint">Estimate only, not a diagnosis. A radiologist should review every image.</p>
+              <div class="summary-actions">
+                <button class="btn-primary" id="save-report">Save report as PDF</button>
+                <button class="btn-secondary" id="new-analysis">New analysis</button>
+              </div>
+            </div>
+          </aside>
         </div>
 
-        <div class="toolbar">
-          <div class="segmented" role="tablist" aria-label="View">
-            <button role="tab" data-view="image" aria-selected="true">Original</button>
-            <button role="tab" data-view="attention" aria-selected="false" disabled>Where it looked</button>
-            <button role="tab" data-view="input" aria-selected="false" disabled>Model input</button>
-          </div>
-          <button class="toggle" id="toggle-boxes" aria-pressed="true" hidden>
-            <span class="toggle-swatch" aria-hidden="true"></span>Radiologist box
-          </button>
-          <span class="file-meta" id="file-meta"></span>
-        </div>
+        <div class="details" id="details" hidden></div>
       </div>
-
-      <aside class="panel">
-        <div class="panel-block">
-          <div class="eyebrow">Progress</div>
-          <ol class="steps" id="steps"></ol>
-        </div>
-
-        <div class="panel-block result" id="result" hidden>
-          <div class="eyebrow">Result</div>
-          <div class="finding" id="finding"></div>
-          <p class="note" id="note"></p>
-
-          <ol class="scale" id="scale" aria-label="How likely a fracture is">
-            <li data-level="unlikely">Unlikely</li>
-            <li data-level="possible">Possible</li>
-            <li data-level="likely">Likely</li>
-          </ol>
-          <p class="evidence" id="evidence"></p>
-          <p class="fineprint" id="limits"></p>
-
-          <dl class="figures">
-            <div id="reference-row" hidden><dt>What radiologists found</dt><dd id="reference"></dd></div>
-            <div id="focus-row" hidden><dt>Did it look at the fracture?</dt><dd id="focus"></dd></div>
-          </dl>
-          <details class="tech">
-            <summary>Technical details</summary>
-            <dl class="figures compact">
-              <div><dt>Model score (0 to 1)</dt><dd id="score"></dd></div>
-              <div><dt>Score needed to flag a fracture</dt><dd id="threshold"></dd></div>
-            </dl>
-          </details>
-        </div>
-
-        <div class="panel-actions" id="panel-actions" hidden>
-          <button class="btn-primary" id="open-report">View report</button>
-          <button class="btn-secondary" id="new-analysis">New analysis</button>
-        </div>
-
-        <p class="disclaimer">Research prototype. Not a medical device and not for diagnostic use.</p>
-      </aside>
-    </section>
-
-    <!-- Report -->
-    <section class="report-view" id="report-view" hidden>
-      <div class="report-bar">
-        <button class="btn-secondary" id="report-back">Back to image</button>
-        <button class="btn-primary" id="report-print">Print or save PDF</button>
-      </div>
-      <article class="report" id="report"></article>
     </section>
 
     <div class="toast" id="toast" role="alert" hidden></div>
