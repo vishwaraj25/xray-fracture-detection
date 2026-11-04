@@ -12,7 +12,6 @@ GRID = "#e4e3df"
 # Fixed categorical order: slot 1 = not fractured, slot 2 = fractured
 NOT_FRACTURED = "#2a78d6"
 FRACTURED = "#eb6834"
-SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 
 plt.rcParams.update({
     "figure.facecolor": SURFACE,
