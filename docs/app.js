@@ -42,29 +42,53 @@ let analyseView = "upload";
 
 /* ---------- Startup ---------- */
 
+let siteData = null;
+let modelReady = null;
+
 async function init() {
   try {
-    const res = await fetch("/api/info");
-    if (!res.ok) throw new Error();
-    modelInfo = await res.json();
-    els.status.classList.add("ready");
-    els.statusText.textContent = `${modelInfo.model} · ready`;
+    siteData = await (await fetch("data.json")).json();
+    modelInfo = siteData.info;
   } catch {
     els.status.classList.add("error");
-    els.statusText.textContent = "Model unavailable";
+    els.statusText.textContent = "Could not load the demo data";
+    return;
   }
+  showFacts();
   loadSamples();
+  // The model is ~22 MB: download it in the background while the visitor looks around
+  modelReady = WebModel.load((p) => { els.statusText.textContent = `Loading model… ${Math.round(p * 100)}%`; })
+    .then(() => {
+      els.status.classList.add("ready");
+      els.statusText.textContent = `${modelInfo.model} · ready`;
+    })
+    .catch(() => {
+      els.status.classList.add("error");
+      els.statusText.textContent = "Model failed to load";
+      throw new Error("The model could not be loaded. Please reload the page.");
+    });
+  modelReady.catch(() => {});
+}
+
+function showFacts() {
+  const t = modelInfo.test;
+  const fact = (value, text) => `<li><strong>${value}</strong><span>${text}</span></li>`;
+  $("facts").innerHTML =
+    fact(t.roc_auc.toFixed(2), `accuracy score (ROC-AUC, 1.0 = perfect) on ${t.images} X-rays it never saw`) +
+    fact(`${Math.round(t.sensitivity * 100)}%`, "of fractures found, while clearing " +
+      `${Math.round(t.specificity * 100)}% of healthy X-rays`) +
+    fact("2 datasets", "from Bangladesh (FracAtlas) and Austria (Graz)");
 }
 
 async function loadSamples() {
   try {
-    const samples = await (await fetch("/api/samples")).json();
+    const samples = siteData.samples;
     if (!samples.length) return;
     for (const s of samples) {
       const btn = document.createElement("button");
       btn.className = "sample";
       btn.title = `${s.region} X-ray from the test set: ${s.label.toLowerCase()}, model ${s.outcome}`;
-      btn.innerHTML = `<img src="/api/samples/${s.id}/thumb" alt="" loading="lazy">` +
+      btn.innerHTML = `<img src="samples/${s.id}.jpg" alt="" loading="lazy">` +
         `<span>${s.region}<em class="outcome ${["caught", "cleared"].includes(s.outcome) ? "good" : "bad"}">${s.outcome}</em></span>`;
       btn.addEventListener("click", () => analyze(null, s));
       els.sampleGrid.appendChild(btn);
@@ -115,7 +139,7 @@ window.addEventListener("paste", (e) => {
 async function analyze(file, sample = null) {
   if (sample) {
     try {
-      const blob = await (await fetch(`/api/samples/${sample.id}/file`)).blob();
+      const blob = await (await fetch(`samples/${sample.id}.jpg`)).blob();
       file = new File([blob], `${sample.id}.jpg`, { type: "image/jpeg" });
     } catch {
       showToast("Could not load the sample image");
@@ -142,11 +166,8 @@ async function analyze(file, sample = null) {
   const started = performance.now();
   let data;
   try {
-    const body = new FormData();
-    body.append("file", file);
-    const res = await fetch("/api/analyze", { method: "POST", body });
-    data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Analysis failed");
+    await modelReady;
+    data = await WebModel.analyze(file, modelInfo, siteData.level_text);
   } catch (err) {
     if (id !== runId) return;
     showToast(err.message || "Analysis failed");
@@ -329,6 +350,7 @@ function resetAnalysis() {
 
 els.navAnalyse.addEventListener("click", () => showSection("analyse"));
 els.navPerformance.addEventListener("click", () => showSection("performance"));
+$("link-performance").addEventListener("click", (e) => { e.preventDefault(); showSection("performance"); });
 
 function showSection(name) {
   const perf = name === "performance";
@@ -370,9 +392,7 @@ function svgEl(tag, attrs = {}, parent = null) {
 async function loadPerformance() {
   if (perf) return;
   try {
-    const res = await fetch("/api/performance");
-    if (!res.ok) throw new Error();
-    perf = await res.json();
+    perf = siteData.performance;
   } catch {
     showToast("Test-set results are not available");
     return;

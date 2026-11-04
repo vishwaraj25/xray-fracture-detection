@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "fracture-app",
-      "runtimeExecutable": "venv/bin/python",
-      "runtimeArgs": ["src/app.py", "--port", "8000"],
-      "port": 8000
+      "name": "web-demo",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8020", "--directory", "docs"],
+      "port": 8020
     }
   ]
 }

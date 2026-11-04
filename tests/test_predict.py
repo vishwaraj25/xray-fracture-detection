@@ -39,38 +39,36 @@ def test_letterbox_reports_placement():
 
 
 @pytest.mark.skipif(not MODEL_READY, reason="trained CNN not available")
-def test_analyze_endpoint_end_to_end():
-    from fastapi.testclient import TestClient
+def test_cnn_score_is_a_probability():
+    from predict import CnnScorer
 
-    from app import app
-
-    client = TestClient(app)
     image = np.random.default_rng(1).integers(0, 255, (300, 200), dtype=np.uint8)
-    res = client.post("/api/analyze", files={"file": ("x.png", png_bytes(image), "image/png")})
-    assert res.status_code == 200
-    body = res.json()
-    assert 0 <= body["score"] <= 1
-    assert [s["key"] for s in body["steps"]] == ["decode", "preprocess", "classify", "explain", "decide"]
-    assert body["positive"] == (body["score"] >= body["threshold"])
-
-    bad = client.post("/api/analyze", files={"file": ("x.txt", b"hello", "text/plain")})
-    assert bad.status_code == 422
+    assert 0 <= CnnScorer().score(png_bytes(image)) <= 1
 
 
-PREDICTIONS_READY = (SRC.parent / "reports" / "predictions" / "cnn.csv").exists()
+@pytest.mark.skipif(not MODEL_READY, reason="trained CNN not available")
+def test_onnx_export_matches_pytorch(tmp_path):
+    import onnxruntime as ort
+    import torch
+
+    from export_web import export_model
+
+    web = export_model(tmp_path / "model.onnx")
+    batch = np.random.default_rng(2).integers(0, 255, (2, 1, 384, 384)).astype(np.float32)
+    logit, cam = ort.InferenceSession(str(tmp_path / "model.onnx")).run(None, {"gray": batch})
+    with torch.no_grad():
+        expected_logit, expected_cam = web(torch.from_numpy(batch))
+    assert cam.shape == (2, 12, 12)
+    assert np.abs(logit - expected_logit.numpy()).max() < 5e-3  # half-precision weights
+    assert np.abs(cam - expected_cam.numpy()).max() < 5e-2
 
 
-@pytest.mark.skipif(not (MODEL_READY and PREDICTIONS_READY), reason="trained CNN or predictions not available")
-def test_performance_endpoint_matches_test_split():
-    from fastapi.testclient import TestClient
+def test_verdict_levels():
+    from predict import LIKELY_SCORE, level_of
 
-    from app import app
-
-    body = TestClient(app).get("/api/performance").json()
-    assert len(body["fractured"]) + len(body["normal"]) == 627
-    caught = sum(s >= body["threshold"] for s in body["fractured"])
-    assert 0 < caught <= len(body["fractured"])
-    assert 0.5 < body["roc_auc"] <= 1
+    assert level_of(0.05, 0.1) == "unlikely"
+    assert level_of(0.1, 0.1) == "possible"
+    assert level_of(LIKELY_SCORE, 0.1) == "likely"
 
 
 def test_annotated_boxes_are_normalised(tmp_path, monkeypatch):

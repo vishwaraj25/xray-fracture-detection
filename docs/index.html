@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Fracture Analysis</title>
+  <title>AI Fracture Detection</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23000'/%3E%3Cpath d='M9 23 L14 9 L18 17 L23 13' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
@@ -27,24 +27,31 @@
     <!-- Upload -->
     <section class="upload" id="upload-view">
       <div class="upload-inner">
-        <h1>Analyse an X-ray</h1>
-        <p class="lede">Upload an X-ray of a hand, leg, hip or shoulder. An AI model checks it for a broken bone and shows where it looked.</p>
-
-        <label class="dropzone" id="dropzone" tabindex="0">
-          <input type="file" id="file-input" accept="image/*,.dcm,application/dicom" hidden>
-          <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-          <span class="drop-title">Drop an image here</span>
-          <span class="drop-sub">or <span class="link">choose a file</span> · you can also paste</span>
-          <span class="drop-meta">JPEG · PNG · DICOM — processed on this computer, never stored</span>
-        </label>
+        <div class="kicker">Final-year project · Deep learning on medical images</div>
+        <h1>AI that spots possible fractures in X-rays</h1>
+        <p class="lede">A ResNet-18 trained on two public X-ray datasets. Click an example below, or upload your own
+          X-ray of a hand, leg, hip or shoulder. It shows its verdict and where it looked. Everything runs in your
+          browser: no image is uploaded.</p>
+        <ul class="facts" id="facts"></ul>
 
         <div class="samples" id="samples" hidden>
           <div class="samples-head">
-            <span>Or try a held-out test image</span>
-            <span class="muted">never seen in training · chosen to show successes and failures</span>
+            <span>Try an example</span>
+            <span class="muted">X-rays the model never saw in training · chosen to show successes and failures</span>
           </div>
           <div class="sample-grid" id="sample-grid"></div>
         </div>
+
+        <label class="dropzone" id="dropzone" tabindex="0">
+          <input type="file" id="file-input" accept="image/jpeg,image/png,image/*" hidden>
+          <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+          <span class="drop-title">Or drop your own X-ray here</span>
+          <span class="drop-sub">or <span class="link">choose a file</span> · you can also paste</span>
+          <span class="drop-meta">JPEG · PNG — analysed on this device, never uploaded</span>
+        </label>
+
+        <p class="links"><a href="https://github.com/vishwaraj25/xray-fracture-detection">Source code and write-up on GitHub</a>
+          · <a href="#" id="link-performance">How well does it work?</a></p>
       </div>
     </section>
 
@@ -166,6 +173,8 @@
 
   <div class="drag-overlay" id="drag-overlay" hidden><span>Drop to analyse</span></div>
 
-  <script src="/static/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.2/dist/ort.wasm.min.js"></script>
+  <script src="web-model.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

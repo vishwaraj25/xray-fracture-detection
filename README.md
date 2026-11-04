@@ -2,6 +2,9 @@
 
 Detects bone fractures in X-rays of the hand, leg, hip and shoulder.
 
+**[Try the live demo](https://vishwaraj25.github.io/xray-fracture-detection/)**: the model runs in your browser, so no
+X-ray is uploaded. Click an example or drop in your own.
+
 The project has **two models**:
 
 | | Model | Role |
@@ -38,7 +41,8 @@ X-ray → build_dataset → preprocessing → feature_extraction → train_svm �
 | Evaluation | `evaluate.py` | Test metrics with confidence intervals, threshold chosen on validation → `reports/results.md` |
 | Graz | `graz.py` | Caches the Graz images and splits them 60/20/20 by patient; after training, tests the CNN on the held-out Graz patients → `reports/graz.md` |
 | Explanation | `explain.py` | Grad-CAM heatmaps scored against the radiologists' boxes → `reports/gradcam.md` |
-| Prediction | `predict.py`, `app.py` | Command line and web app |
+| Prediction | `predict.py` | Command line: score X-rays with the CNN or the SVM |
+| Web demo | `export_web.py` | Exports the CNN to ONNX, picks the example X-rays (successes and failures) and writes everything the demo needs into `docs/` |
 
 ## Results
 
@@ -126,34 +130,42 @@ python src/graz.py --prepare                 # cache and split the Graz images; 
 python src/run_pipeline.py --with-graz       # every stage in order (about 2.5 hours on an Apple M2)
 python src/run_pipeline.py --skip-cnn --with-graz   # reuse a trained CNN (a few minutes)
 python src/predict.py path/to/xray.jpg [--model svm]
-python src/app.py                       # web app on http://127.0.0.1:8000
+python src/export_web.py                # rebuild the web demo in docs/
+python -m http.server -d docs           # open the demo at http://localhost:8000
 pytest tests
 ```
 
 Each stage can also be run on its own, for example `python src/evaluate.py`.
 
-## Web app
+## Web demo
 
-A minimal black-and-white interface for analysing one X-ray:
+A minimal black-and-white page, in `docs/`, that runs the CNN in the browser with
+[ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/). It is plain static files, so it is hosted for free
+on GitHub Pages with no server. The model (22 MB, weights in half precision) downloads while you look around.
 
-- Drop, choose or paste an image (JPEG, PNG or DICOM), or click one of the held-out test samples.
-- The steps (load → preprocess → inference → attention map → decision) animate as they finish, each with its real timing.
+- Click one of the 8 held-out examples, or drop, choose or paste your own JPEG or PNG.
+- The steps (open → prepare → look for fractures → where it looked → result) animate as they finish, each with its
+  real timing.
 - The result is one of three plain levels (fracture unlikely, possible or likely) with a sentence on what it means and
   how often X-rays rated that way were really fractured in testing. The raw score sits under "Technical details".
 - The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
   384×384 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
-- For X-rays without a suspected fracture, the attention map is faded and no peak is marked.
-- For the test samples, the radiologist's fracture box is drawn over the image (key `b` toggles it), and the panel
-  says whether the model's attention peak landed on the fracture: the same check as `reports/gradcam.md`.
+- For the examples, the radiologist's fracture box is drawn over the image (key `b` toggles it), and the panel says
+  whether the model's attention peak landed on the fracture: the same check as `reports/gradcam.md`.
 - The **Performance** page plots all 627 test X-rays by score. Dragging the threshold updates the fractures caught,
   false alarms and the point on the ROC curve live.
-- Images are processed in memory on the local machine and never saved.
+
+The browser repeats the Python pipeline (grayscale, pad to a square, score the image and its mirror, Grad-CAM). On 24
+random test X-rays its scores differ from PyTorch's by 0.003 on average (0.016 at most) and every verdict matches.
+For this ResNet-18, Grad-CAM reduces to the last feature maps weighted by the final layer's weights, so the exported
+model returns the heat-map grid directly and the browser needs no backpropagation.
 
 ## Project structure
 
 ```
-src/            pipeline stages (table above), run_pipeline.py, app.py and static/ (web front end)
-tests/          unit tests for preprocessing, features, splitting, thresholds and the app
+src/            pipeline stages (table above) and run_pipeline.py
+docs/           the web demo: page, model.onnx, example X-rays and test scores (built by export_web.py, served by GitHub Pages)
+tests/          unit tests for preprocessing, features, splitting, thresholds and the ONNX export
 reports/        data analysis, results, Grad-CAM report, figures and test-set predictions
 data/           download instructions; raw/ and processed/ are git-ignored
 models/         svm.joblib and cnn.pt (git-ignored; recreate with run_pipeline.py)
