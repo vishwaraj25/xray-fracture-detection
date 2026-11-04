@@ -3,20 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Fracture Detection</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23000'/%3E%3Cpath d='M9 23 L14 9 L18 17 L23 13' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <title>Fracture Screening</title>
+  <meta name="description" content="A ResNet-18 that flags possible fractures in X-rays, shows where it looked and writes a short report. Runs in your browser.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23161615'/%3E%3Cpath d='M9 23 L14 9 L18 17 L23 13' stroke='%23f4f3ef' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
+    <a class="brand" href="./">
       <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M9 23 L14 9 L18 17 L23 13"/></svg>
-      <span class="brand-name">Fracture Analysis</span>
-      <nav class="nav" aria-label="Sections">
-        <button id="nav-analyse" aria-current="page">Analyse</button>
-        <button id="nav-performance">Performance</button>
-      </nav>
-    </div>
+      <span class="brand-name">Fracture Screening</span>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="./" aria-current="page">Analyse</a>
+      <a href="model.html">How it works</a>
+    </nav>
     <div class="status" id="status">
       <span class="status-dot" aria-hidden="true"></span>
       <span id="status-text">Loading model…</span>
@@ -24,20 +28,21 @@
   </header>
 
   <main>
-    <!-- Upload -->
-    <section class="upload" id="upload-view">
-      <div class="upload-inner">
-        <div class="kicker">Final-year project · Deep learning on medical images</div>
-        <h1>AI that spots possible fractures in X-rays</h1>
-        <p class="lede">A ResNet-18 trained on two public X-ray datasets. Click an example below, or upload your own
-          X-ray of a hand, leg, hip or shoulder. It shows its verdict and where it looked. Everything runs in your
-          browser: no image is uploaded.</p>
-        <ul class="facts" id="facts"></ul>
+    <!-- Home -->
+    <section class="home" id="upload-view">
+      <div class="home-inner">
+        <p class="kicker">Research prototype · runs in your browser</p>
+        <h1>Screen an X-ray for fractures, and see why.</h1>
+        <p class="lede">Upload an X-ray of a hand, leg, hip or shoulder. A ResNet-18 estimates how likely a fracture
+          is, shows where it looked, and writes a short report for a radiologist to review. It does not diagnose.
+          No image leaves your device.</p>
+
+        <dl class="stats" id="facts"></dl>
 
         <div class="samples" id="samples" hidden>
-          <div class="samples-head">
-            <span>Try an example</span>
-            <span class="muted">X-rays the model never saw in training · chosen to show successes and failures</span>
+          <div class="section-head">
+            <h2>Try a held-out X-ray</h2>
+            <span class="muted">never seen in training · successes and failures</span>
           </div>
           <div class="sample-grid" id="sample-grid"></div>
         </div>
@@ -45,13 +50,20 @@
         <label class="dropzone" id="dropzone" tabindex="0">
           <input type="file" id="file-input" accept="image/jpeg,image/png,image/*" hidden>
           <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-          <span class="drop-title">Or drop your own X-ray here</span>
-          <span class="drop-sub">or <span class="link">choose a file</span> · you can also paste</span>
-          <span class="drop-meta">JPEG · PNG — analysed on this device, never uploaded</span>
+          <span class="drop-text"><strong>Drop your own X-ray</strong> or <span class="link">choose a file</span></span>
+          <span class="drop-meta">JPEG or PNG · you can also paste</span>
         </label>
 
-        <p class="links"><a href="https://github.com/vishwaraj25/xray-fracture-detection">Source code and write-up on GitHub</a>
-          · <a href="#" id="link-performance">How well does it work?</a></p>
+        <ol class="how">
+          <li><span class="how-n">01</span><strong>Screen</strong><span>The model scores the image and its mirror image.</span></li>
+          <li><span class="how-n">02</span><strong>Explain</strong><span>A heat map shows the region that drove the score.</span></li>
+          <li><span class="how-n">03</span><strong>Report</strong><span>A short summary to print or save as PDF.</span></li>
+        </ol>
+
+        <footer class="home-foot">
+          <span>Not a medical device. Not for diagnostic use.</span>
+          <span><a href="model.html">How it works</a> · <a href="https://github.com/vishwaraj25/xray-fracture-detection">Source on GitHub</a></span>
+        </footer>
       </div>
     </section>
 
@@ -76,7 +88,7 @@
           <div class="segmented" role="tablist" aria-label="View">
             <button role="tab" data-view="image" aria-selected="true">Original</button>
             <button role="tab" data-view="attention" aria-selected="false" disabled>Where it looked</button>
-            <button role="tab" data-view="input" aria-selected="false" disabled>What the model saw</button>
+            <button role="tab" data-view="input" aria-selected="false" disabled>Model input</button>
           </div>
           <button class="toggle" id="toggle-boxes" aria-pressed="true" hidden>
             <span class="toggle-swatch" aria-hidden="true"></span>Radiologist box
@@ -87,7 +99,7 @@
 
       <aside class="panel">
         <div class="panel-block">
-          <div class="eyebrow">What the model is doing</div>
+          <div class="eyebrow">Progress</div>
           <ol class="steps" id="steps"></ol>
         </div>
 
@@ -102,6 +114,7 @@
             <li data-level="likely">Likely</li>
           </ol>
           <p class="evidence" id="evidence"></p>
+          <p class="fineprint" id="limits"></p>
 
           <dl class="figures">
             <div id="reference-row" hidden><dt>What radiologists found</dt><dd id="reference"></dd></div>
@@ -116,56 +129,22 @@
           </details>
         </div>
 
-        <div class="panel-block about" id="about" hidden>
-          <div class="eyebrow">How reliable is it?</div>
-          <dl class="figures compact" id="model-figures"></dl>
-          <p class="fineprint">Measured on test X-rays the model never saw during training. The cut-off is set to catch most fractures,
-            so some healthy X-rays are flagged by mistake. The highlighted area shows where the model looked; it is not an outline of the fracture.</p>
-        </div>
-
-        <div class="panel-actions">
-          <button class="btn-primary" id="new-analysis">New analysis</button>
+        <div class="panel-actions" id="panel-actions" hidden>
+          <button class="btn-primary" id="open-report">View report</button>
+          <button class="btn-secondary" id="new-analysis">New analysis</button>
         </div>
 
         <p class="disclaimer">Research prototype. Not a medical device and not for diagnostic use.</p>
       </aside>
     </section>
 
-    <!-- Performance -->
-    <section class="perf" id="performance-view" hidden>
-      <div class="perf-inner">
-        <h1>How well it works</h1>
-        <p class="lede">Every dot is one of <span id="perf-total"></span> test X-rays the model never saw, placed by its fracture score.
-          Drag the threshold: moving it left catches more fractures but raises more false alarms.</p>
-
-        <div class="strip" id="strip" tabindex="0" role="slider" aria-label="Decision threshold"
-             aria-valuemin="0" aria-valuemax="1"></div>
-
-        <div class="tiles">
-          <div class="tile"><div class="tile-label">Fractures caught</div>
-            <div class="tile-value"><span id="perf-caught"></span><span class="tile-of" id="perf-caught-of"></span></div>
-            <div class="tile-sub" id="perf-sens"></div></div>
-          <div class="tile"><div class="tile-label">False alarms</div>
-            <div class="tile-value"><span id="perf-fp"></span><span class="tile-of" id="perf-fp-of"></span></div>
-            <div class="tile-sub" id="perf-spec"></div></div>
-          <div class="tile"><div class="tile-label">Flags that are real fractures</div>
-            <div class="tile-value"><span id="perf-ppv"></span></div>
-            <div class="tile-sub" id="perf-flagged"></div></div>
-        </div>
-
-        <div class="perf-bottom">
-          <div class="roc" id="roc"></div>
-          <div class="perf-notes">
-            <div class="eyebrow">ROC curve</div>
-            <p>Each point on the curve is one threshold: how many fractures are caught (up) against how many normal
-              X-rays are flagged (right). The dot is the current threshold. A useless model follows the dashed diagonal;
-              the area under the curve is <strong id="perf-auc"></strong> (0.5 = guessing, 1 = perfect).</p>
-            <p>The default threshold, <span class="mono" id="perf-chosen"></span>, was chosen on separate validation
-              images so that, with 95% confidence, at least 85% of fractures are caught.</p>
-            <button class="btn-secondary" id="perf-reset" hidden>Reset to chosen threshold</button>
-          </div>
-        </div>
+    <!-- Report -->
+    <section class="report-view" id="report-view" hidden>
+      <div class="report-bar">
+        <button class="btn-secondary" id="report-back">Back to image</button>
+        <button class="btn-primary" id="report-print">Print or save PDF</button>
       </div>
+      <article class="report" id="report"></article>
     </section>
 
     <div class="toast" id="toast" role="alert" hidden></div>

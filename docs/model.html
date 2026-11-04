@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How It Works · Fracture Screening</title>
+  <meta name="description" content="The data, model, evaluation and limitations behind the fracture screening demo.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23161615'/%3E%3Cpath d='M9 23 L14 9 L18 17 L23 13' stroke='%23f4f3ef' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M9 23 L14 9 L18 17 L23 13"/></svg>
+      <span class="brand-name">Fracture Screening</span>
+    </a>
+    <nav class="nav" aria-label="Pages">
+      <a href="./">Analyse</a>
+      <a href="model.html" aria-current="page">How it works</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="doc">
+      <article class="doc-inner">
+        <p class="kicker">How it works</p>
+        <h1>What the model does, and how it was tested.</h1>
+        <p class="lede">A ResNet-18 neural network estimates how likely it is that an X-ray shows a fracture. Every
+          number below comes from images the model never saw in training. It is a research prototype: it has not
+          been tested in clinical use.</p>
+
+        <nav class="doc-toc" aria-label="Contents">
+          <a href="#data">Data</a><a href="#model">Model</a><a href="#evaluated">What was evaluated</a>
+          <a href="#results">Results</a><a href="#threshold">Threshold</a><a href="#heatmaps">Heat maps</a>
+          <a href="#limits">Limitations</a>
+        </nav>
+
+        <section id="data">
+          <h2><span class="n">01</span>Data</h2>
+          <p>Two public datasets, both CC BY 4.0. Each was split so that related images never appear on both sides of
+            a split.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Dataset</th><th class="num">X-rays</th><th class="num">Fractured</th><th>Split</th></tr></thead>
+            <tbody>
+              <tr><td><a href="https://doi.org/10.6084/m9.figshare.22363012">FracAtlas</a>, Bangladesh. Hand, leg, hip, shoulder.</td>
+                <td class="num">4,083</td><td class="num">719 (18%)</td><td>70 / 15 / 15 train, validation, test, grouped by near-duplicate image</td></tr>
+              <tr><td><a href="https://doi.org/10.6084/m9.figshare.14825193">GRAZPEDWRI-DX</a> (part 1), Austria. Children's wrists.</td>
+                <td class="num">5,031</td><td class="num">about 66%</td><td>60 / 20 / 20 by patient (1,499 patients)</td></tr>
+            </tbody>
+          </table></div>
+          <p>FracAtlas has no patient IDs, so near-duplicate images were grouped with a perceptual hash (206 groups).
+            This matters: an early version of the project scored 99% on a random split and 7% on new images, because
+            copies of the same X-ray sat in both training and test. Graz images with a cast, metal or an uncertain
+            diagnosis were left out of training.</p>
+        </section>
+
+        <section id="model">
+          <h2><span class="n">02</span>Model</h2>
+          <ol class="pipeline">
+            <li><span class="how-n">01</span><strong>Prepare</strong><span>Grayscale, padded to a square, 384 × 384 px.</span></li>
+            <li><span class="how-n">02</span><strong>Score</strong><span>ResNet-18, pretrained on ImageNet, fine-tuned on X-rays.</span></li>
+            <li><span class="how-n">03</span><strong>Average</strong><span>The image and its mirror image are scored and averaged.</span></li>
+            <li><span class="how-n">04</span><strong>Explain</strong><span>A Grad-CAM heat map from the last layer.</span></li>
+          </ol>
+          <p>Training used augmentation, a loss weighted towards fractures, and early stopping on validation data. A
+            classical baseline (an SVM on HOG and LBP image features) was trained on the same split for comparison.</p>
+          <p>The demo runs the same network in your browser: it was exported to ONNX with half-precision weights
+            (22 MB). On 24 test X-rays its scores differ from the original by 0.003 on average, and every verdict
+            matches.</p>
+        </section>
+
+        <section id="evaluated">
+          <h2><span class="n">03</span>What was evaluated, and what was not</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Evaluated</th><th>Not evaluated</th></tr></thead>
+            <tbody>
+              <tr><td>627 held-out FracAtlas X-rays (111 fractured)</td><td>A hospital outside the training data</td></tr>
+              <tr><td>296 held-out Graz patients: 526 first-visit X-rays without a cast or metal</td><td>Clinical use, workflow or reader studies</td></tr>
+              <tr><td>Results by body region, and with metal implants removed</td><td>Results by age or sex</td></tr>
+              <tr><td>Heat maps against radiologists' fracture boxes</td><td>Repeated training runs (one run only)</td></tr>
+              <tr><td>Browser output against the original model</td><td>DICOM files in the browser demo</td></tr>
+            </tbody>
+          </table></div>
+          <p>The cut-off was chosen on validation images only: the highest score at which we are 95% confident that at
+            least 85% of fractures are flagged. The test images were not used for any choice.</p>
+        </section>
+
+        <section id="results">
+          <h2><span class="n">04</span>Results</h2>
+          <p><strong>FracAtlas test set</strong>, 627 X-rays. Random guessing scores 0.50 ROC-AUC and about 0.18
+            PR-AUC. Brackets are 95% confidence intervals.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Model</th><th class="num">ROC-AUC</th><th class="num">PR-AUC</th><th class="num">Sensitivity</th><th class="num">Specificity</th></tr></thead>
+            <tbody>
+              <tr><td>Metadata only (never sees the image)</td><td class="num">0.78 [0.73–0.83]</td><td class="num">0.51</td><td class="num">94%</td><td class="num">17%</td></tr>
+              <tr><td>SVM on HOG + LBP</td><td class="num">0.77 [0.71–0.82]</td><td class="num">0.44</td><td class="num">79%</td><td class="num">62%</td></tr>
+              <tr class="hl"><td>ResNet-18 (this demo)</td><td class="num">0.91 [0.88–0.94]</td><td class="num">0.81</td><td class="num">89%</td><td class="num">69%</td></tr>
+            </tbody>
+          </table></div>
+          <p><strong>Effect of adding Graz to training</strong>, ROC-AUC on the same held-out images.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Test set</th><th class="num">X-rays</th><th class="num">FracAtlas only</th><th class="num">FracAtlas + Graz</th></tr></thead>
+            <tbody>
+              <tr><td>Graz held-out patients, first visit, no cast or metal</td><td class="num">526</td><td class="num">0.66</td><td class="num">0.98</td></tr>
+              <tr><td>FracAtlas test, all regions</td><td class="num">627</td><td class="num">0.87</td><td class="num">0.91</td></tr>
+              <tr><td>FracAtlas test, hand</td><td class="num">210</td><td class="num">0.84</td><td class="num">0.90</td></tr>
+            </tbody>
+          </table></div>
+          <div class="callout"><p>The 0.98 is on held-out Graz patients, but other patients from the same hospital were in
+            training. It shows that training data from a hospital helps there. It does not show that the model works at a
+            hospital it has never seen.</p></div>
+        </section>
+
+        <section id="threshold">
+          <h2><span class="n">05</span>Explore the threshold</h2>
+          <p>Every dot is one of <span id="perf-total"></span> test X-rays, placed by its score. Drag the threshold:
+            moving it left flags more fractures, but also more healthy X-rays.</p>
+          <div class="strip" id="strip" tabindex="0" role="slider" aria-label="Decision threshold"
+               aria-valuemin="0" aria-valuemax="1"></div>
+          <div class="tiles">
+            <div class="tile"><div class="tile-label">Fractures flagged</div>
+              <div class="tile-value"><span id="perf-caught"></span><span class="tile-of" id="perf-caught-of"></span></div>
+              <div class="tile-sub" id="perf-sens"></div></div>
+            <div class="tile"><div class="tile-label">False alarms</div>
+              <div class="tile-value"><span id="perf-fp"></span><span class="tile-of" id="perf-fp-of"></span></div>
+              <div class="tile-sub" id="perf-spec"></div></div>
+            <div class="tile"><div class="tile-label">Flags that were fractures</div>
+              <div class="tile-value"><span id="perf-ppv"></span></div>
+              <div class="tile-sub" id="perf-flagged"></div></div>
+          </div>
+          <div class="perf-bottom">
+            <div class="roc" id="roc"></div>
+            <div class="perf-notes">
+              <p>The ROC curve shows every threshold at once: fractures flagged (up) against healthy X-rays flagged
+                (right). The dot is the current threshold. A useless model follows the dashed diagonal; the area under
+                this curve is <strong id="perf-auc"></strong>.</p>
+              <p>The demo's cut-off is <span class="mono" id="perf-chosen"></span>. It favours flagging fractures, so it
+                raises many false alarms.</p>
+              <button class="btn-secondary" id="perf-reset" hidden>Reset to the chosen cut-off</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="heatmaps">
+          <h2><span class="n">06</span>Heat maps</h2>
+          <p>Grad-CAM shows which region drove the score, on a coarse grid of 32-pixel cells. For the 99 test fractures
+            the model flagged, its peak was within one cell of the radiologist's box in <strong>61%</strong>, and within
+            14 pixels in <strong>53%</strong>. So it often, but not always, looks at the fracture. The heat map is not an
+            outline of a fracture.</p>
+        </section>
+
+        <section id="limits">
+          <h2><span class="n">07</span>Limitations</h2>
+          <ul>
+            <li>Not validated in clinical use, or at any hospital outside its training data.</li>
+            <li>It missed 12 of 111 test fractures. A low score does not exclude a fracture.</li>
+            <li>Many flags are false alarms: 38% of flagged test X-rays had a fracture.</li>
+            <li>The cut-off does not transfer between hospitals. At this cut-off, only 35% of healthy Graz wrists are
+              cleared, because Graz scores run higher.</li>
+            <li>Shortcuts exist: 98% of FracAtlas X-rays with metal implants are fractured, and almost every Graz X-ray
+              with a cast is flagged. A model that never sees the image scores 0.78 ROC-AUC from such labels alone.</li>
+            <li>Only 6 hip and 3 shoulder fractures were in the test set, so those results are uncertain.</li>
+            <li>The model was trained once; another training run would give somewhat different numbers.</li>
+          </ul>
+        </section>
+
+        <footer class="home-foot">
+          <span>Research prototype. Not a medical device and not for diagnostic use.</span>
+          <span><a href="./">Analyse an X-ray</a> · <a href="https://github.com/vishwaraj25/xray-fracture-detection">Source and full reports</a></span>
+        </footer>
+      </article>
+    </div>
+  </main>
+
+  <script src="model.js"></script>
+</body>
+</html>

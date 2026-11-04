@@ -3,42 +3,54 @@
 const STEPS = [
   { key: "decode", label: "Open image" },
   { key: "preprocess", label: "Prepare image" },
-  { key: "classify", label: "Look for fractures" },
+  { key: "classify", label: "Score the image" },
   { key: "explain", label: "Where it looked" },
-  { key: "decide", label: "Result" },
+  { key: "decide", label: "Estimate" },
 ];
 const STEP_PACE_MS = 380;
 const CHECK_SVG = '<svg viewBox="0 0 12 12"><path d="M2.5 6.2 5 8.5 9.5 3.8"/></svg>';
 
+// Measured once in the project's reports (graz.md, gradcam.md, results.md); not in data.json
+const GRAZ_AUC = 0.976;
+const CAM_HIT_RATE = 0.61;
+
+// What a radiologist is asked to do next, per level. Never a diagnosis.
+const NEXT_STEP = {
+  likely: "Prioritise this image for radiologist review. Start with the highlighted region, but read the whole " +
+    "image: the model's attention can fall away from a fracture.",
+  possible: "Radiologist review recommended. The model is uncertain, and a fracture may lie outside the " +
+    "highlighted region.",
+  unlikely: "No region flagged. Read as usual: a low score does not exclude a fracture.",
+};
+
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 const els = {
   status: $("status"), statusText: $("status-text"),
-  upload: $("upload-view"), analysis: $("analysis-view"),
+  upload: $("upload-view"), analysis: $("analysis-view"), reportView: $("report-view"), report: $("report"),
   dropzone: $("dropzone"), fileInput: $("file-input"),
   samples: $("samples"), sampleGrid: $("sample-grid"),
   stage: $("stage"), viewerEmpty: $("viewer-empty"),
   original: $("img-original"), attention: $("img-attention"), input: $("img-input"),
   peak: $("peak"), fileMeta: $("file-meta"),
   steps: $("steps"), result: $("result"), finding: $("finding"), note: $("note"),
-  scale: $("scale"), evidence: $("evidence"),
+  scale: $("scale"), evidence: $("evidence"), limits: $("limits"),
   score: $("score"), threshold: $("threshold"),
   referenceRow: $("reference-row"), reference: $("reference"),
   focusRow: $("focus-row"), focus: $("focus"),
   boxes: $("boxes"), toggleBoxes: $("toggle-boxes"),
-  performance: $("performance-view"),
-  navAnalyse: $("nav-analyse"), navPerformance: $("nav-performance"),
-  about: $("about"), modelFigures: $("model-figures"),
-  newAnalysis: $("new-analysis"), toast: $("toast"), dragOverlay: $("drag-overlay"),
+  panelActions: $("panel-actions"),
+  toast: $("toast"), dragOverlay: $("drag-overlay"),
   tabs: [...document.querySelectorAll(".segmented button")],
 };
 
 let modelInfo = null;
 let runId = 0;
 let objectUrl = null;
-// Which part of the "Analyse" section to show when coming back from Performance
-let analyseView = "upload";
+// The last finished analysis, for the report
+let last = null;
 
 /* ---------- Startup ---------- */
 
@@ -57,10 +69,10 @@ async function init() {
   showFacts();
   loadSamples();
   // The model is ~22 MB: download it in the background while the visitor looks around
-  modelReady = WebModel.load((p) => { els.statusText.textContent = `Loading model… ${Math.round(p * 100)}%`; })
+  modelReady = WebModel.load((p) => { els.statusText.textContent = `Loading model ${Math.round(p * 100)}%`; })
     .then(() => {
       els.status.classList.add("ready");
-      els.statusText.textContent = `${modelInfo.model} · ready`;
+      els.statusText.textContent = "Model ready";
     })
     .catch(() => {
       els.status.classList.add("error");
@@ -70,31 +82,36 @@ async function init() {
   modelReady.catch(() => {});
 }
 
-function showFacts() {
-  const t = modelInfo.test;
-  const fact = (value, text) => `<li><strong>${value}</strong><span>${text}</span></li>`;
-  $("facts").innerHTML =
-    fact(t.roc_auc.toFixed(2), `accuracy score (ROC-AUC, 1.0 = perfect) on ${t.images} X-rays it never saw`) +
-    fact(`${Math.round(t.sensitivity * 100)}%`, "of fractures found, while clearing " +
-      `${Math.round(t.specificity * 100)}% of healthy X-rays`) +
-    fact("2 datasets", "from Bangladesh (FracAtlas) and Austria (Graz)");
+// Counts on the held-out test split, at the chosen cut-off
+function testCounts() {
+  const { fractured, normal, threshold } = siteData.performance;
+  const caught = fractured.filter((s) => s >= threshold).length;
+  const falseAlarms = normal.filter((s) => s >= threshold).length;
+  return { P: fractured.length, N: normal.length, caught, falseAlarms };
 }
 
-async function loadSamples() {
-  try {
-    const samples = siteData.samples;
-    if (!samples.length) return;
-    for (const s of samples) {
-      const btn = document.createElement("button");
-      btn.className = "sample";
-      btn.title = `${s.region} X-ray from the test set: ${s.label.toLowerCase()}, model ${s.outcome}`;
-      btn.innerHTML = `<img src="samples/${s.id}.jpg" alt="" loading="lazy">` +
-        `<span>${s.region}<em class="outcome ${["caught", "cleared"].includes(s.outcome) ? "good" : "bad"}">${s.outcome}</em></span>`;
-      btn.addEventListener("click", () => analyze(null, s));
-      els.sampleGrid.appendChild(btn);
-    }
-    els.samples.hidden = false;
-  } catch { /* samples are optional */ }
+function showFacts() {
+  const t = modelInfo.test;
+  const fact = (value, text) => `<div><dt>${value}</dt><dd>${text}</dd></div>`;
+  $("facts").innerHTML =
+    fact(t.roc_auc.toFixed(2), `ROC-AUC on ${t.images} held-out X-rays (1.0 is perfect, 0.5 is chance)`) +
+    fact(pct(t.sensitivity), `of fractures flagged in that test, with ${pct(t.specificity)} of healthy X-rays cleared`) +
+    fact("2", "public datasets: FracAtlas (Bangladesh) and GRAZPEDWRI-DX (Austria)");
+}
+
+function loadSamples() {
+  const samples = siteData.samples;
+  if (!samples.length) return;
+  for (const s of samples) {
+    const btn = document.createElement("button");
+    btn.className = "sample";
+    btn.title = `${s.region} X-ray from the test set: ${s.label.toLowerCase()}, model ${s.outcome}`;
+    btn.innerHTML = `<img src="samples/${s.id}.jpg" alt="" loading="lazy">` +
+      `<span>${s.region}<em class="outcome ${["caught", "cleared"].includes(s.outcome) ? "good" : "bad"}">${s.outcome}</em></span>`;
+    btn.addEventListener("click", () => analyze(null, s));
+    els.sampleGrid.appendChild(btn);
+  }
+  els.samples.hidden = false;
 }
 
 /* ---------- Input ---------- */
@@ -148,11 +165,9 @@ async function analyze(file, sample = null) {
   }
   const id = ++runId;
   resetAnalysis();
-  analyseView = "analysis";
-  showSection("analyse");
+  showView("analysis");
   els.fileMeta.textContent = `${file.name} · ${formatBytes(file.size)}`;
 
-  // Show the image straight away when the browser can render it (not DICOM)
   if (file.type.startsWith("image/")) {
     objectUrl = URL.createObjectURL(file);
     await setImage(els.original, objectUrl);
@@ -189,6 +204,7 @@ async function analyze(file, sample = null) {
     await sleep(STEP_PACE_MS * 0.4);
   }
   if (id !== runId) return;
+  last = { data, sample, name: file.name, bytes: file.size, at: new Date() };
   showResult(data, sample);
 }
 
@@ -221,28 +237,28 @@ function showResult(data, sample) {
   els.score.textContent = data.score.toFixed(3);
   els.threshold.textContent = data.threshold.toFixed(3);
   for (const li of els.scale.children) li.classList.toggle("on", li.dataset.level === data.level);
-  const per100 = modelInfo?.levels?.[data.level];
-  els.evidence.textContent = per100 == null ? "" :
-    `In our tests, of 100 X-rays rated "${data.level}", about ${per100} really had a fracture.`;
+  els.evidence.textContent = levelEvidence(data.level);
+  const t = modelInfo.test;
+  els.limits.textContent = `In testing it flagged ${pct(t.sensitivity)} of fractures and cleared ` +
+    `${pct(t.specificity)} of healthy X-rays. Not validated for clinical use.`;
 
   els.referenceRow.hidden = !sample;
   if (sample) els.reference.textContent = sample.label;
   if (sample?.boxes.length) {
-    els.focus.textContent = !data.positive ? "No, it missed this fracture"
-      : focusOnBox(data, sample.boxes) ? "Yes, it looked at the fracture" : "No, it looked elsewhere";
+    els.focus.textContent = focusText(data, sample);
     els.focusRow.hidden = false;
   }
+  els.panelActions.hidden = false;
+}
 
-  if (modelInfo) {
-    const t = modelInfo.test;
-    els.modelFigures.innerHTML = [
-      ["Fractures it finds", `${Math.round(t.sensitivity * 100)} of 100`],
-      ["Healthy X-rays it clears", `${Math.round(t.specificity * 100)} of 100`],
-      ["Overall quality (1.0 = perfect)", t.roc_auc.toFixed(2)],
-      ["Model", `${modelInfo.model}, trained on ${modelInfo.dataset}`],
-    ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
-    els.about.hidden = false;
-  }
+function levelEvidence(level) {
+  const per100 = modelInfo.levels?.[level];
+  return per100 == null ? "" : `In testing, of 100 X-rays rated "${level}", about ${per100} had a fracture.`;
+}
+
+function focusText(data, sample) {
+  if (!data.positive) return "Not flagged: a miss";
+  return focusOnBox(data, sample.boxes) ? "Yes, peak on the annotated region" : "No, peak outside the annotated region";
 }
 
 /* ---------- Steps ---------- */
@@ -297,7 +313,12 @@ els.toggleBoxes.addEventListener("click", () =>
 els.tabs.forEach((tab) => tab.addEventListener("click", () => setView(tab.dataset.view)));
 
 window.addEventListener("keydown", (e) => {
-  if (els.analysis.hidden || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!els.reportView.hidden) {
+    if (e.key === "Escape") showView("analysis");
+    return;
+  }
+  if (els.analysis.hidden) return;
   const view = { 1: "image", 2: "attention", 3: "input" }[e.key];
   if (view && !els.tabs.find((t) => t.dataset.view === view).disabled) setView(view);
   if (e.key === "Escape") goHome();
@@ -314,20 +335,26 @@ function enableTab(view) {
   els.tabs.find((t) => t.dataset.view === view).disabled = false;
 }
 
+function showView(name) {
+  els.upload.hidden = name !== "upload";
+  els.analysis.hidden = name !== "analysis";
+  els.reportView.hidden = name !== "report";
+}
+
 /* ---------- Reset ---------- */
 
-els.newAnalysis.addEventListener("click", goHome);
+$("new-analysis").addEventListener("click", goHome);
 
 function goHome() {
   runId++;
-  analyseView = "upload";
-  showSection("analyse");
+  showView("upload");
   resetAnalysis();
 }
 
 function resetAnalysis() {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
+  last = null;
   renderSteps();
   els.original.classList.remove("shown");
   els.original.removeAttribute("src");
@@ -341,201 +368,180 @@ function resetAnalysis() {
   els.viewerEmpty.hidden = false;
   els.stage.classList.remove("scanning", "dimmed");
   els.result.hidden = true;
-  els.about.hidden = true;
+  els.panelActions.hidden = true;
   els.tabs.forEach((t) => { t.disabled = t.dataset.view !== "image"; });
   setView("image");
 }
 
-/* ---------- Sections ---------- */
+/* ---------- Report ---------- */
 
-els.navAnalyse.addEventListener("click", () => showSection("analyse"));
-els.navPerformance.addEventListener("click", () => showSection("performance"));
-$("link-performance").addEventListener("click", (e) => { e.preventDefault(); showSection("performance"); });
+$("open-report").addEventListener("click", openReport);
+$("report-back").addEventListener("click", () => showView("analysis"));
+$("report-print").addEventListener("click", () => window.print());
 
-function showSection(name) {
-  const perf = name === "performance";
-  els.performance.hidden = !perf;
-  els.upload.hidden = perf || analyseView !== "upload";
-  els.analysis.hidden = perf || analyseView !== "analysis";
-  els.navAnalyse.toggleAttribute("aria-current", !perf);
-  els.navPerformance.toggleAttribute("aria-current", perf);
-  if (perf) loadPerformance();
+// Where the attention peak sits, in thirds of the image as displayed (not the patient's left or right)
+function regionText(peak) {
+  const col = peak.x < 1 / 3 ? "left" : peak.x > 2 / 3 ? "right" : "centre";
+  const row = peak.y < 1 / 3 ? "upper" : peak.y > 2 / 3 ? "lower" : "middle";
+  return row === "middle" && col === "centre" ? "Centre of the image" : `${capitalise(row)} ${col} of the image`;
 }
 
-/* ---------- Performance: test-set scores at any threshold ---------- */
-
-const SVG_NS = "http://www.w3.org/2000/svg";
-// Strip plot geometry (viewBox units). Scores use a square-root axis: most normal
-// X-rays score below 0.05 and would otherwise collapse into one blob at zero.
-const STRIP = { w: 640, h: 196, left: 16, right: 16, axisY: 170 };
-const ROWS = [
-  { key: "fractured", label: "Fractured", top: 26 },
-  { key: "normal", label: "Normal", top: 100 },
-];
-const ROW_H = 54;
-const TICKS = [0, 0.01, 0.05, 0.15, 0.3, 0.5, 0.75, 1];
-
-let perf = null;
-let perfThreshold = 0;
-let stripParts = null;
-
-const stripX = (score) => STRIP.left + Math.sqrt(score) * (STRIP.w - STRIP.left - STRIP.right);
-const stripScore = (x) => Math.min(1, Math.max(0, (x - STRIP.left) / (STRIP.w - STRIP.left - STRIP.right))) ** 2;
-
-function svgEl(tag, attrs = {}, parent = null) {
-  const node = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  if (parent) parent.appendChild(node);
-  return node;
-}
-
-async function loadPerformance() {
-  if (perf) return;
-  try {
-    perf = siteData.performance;
-  } catch {
-    showToast("Test-set results are not available");
-    return;
+// The original, dimmed, with the heat map, the peak ring and any radiologist boxes drawn on top
+async function annotatedImage(data, sample) {
+  const [base, heat] = await Promise.all([loadImage(data.images.original), loadImage(data.images.attention)]);
+  const canvas = Object.assign(document.createElement("canvas"), { width: base.width, height: base.height });
+  const ctx = canvas.getContext("2d");
+  ctx.filter = "brightness(0.55)";
+  ctx.drawImage(base, 0, 0);
+  ctx.filter = "none";
+  ctx.drawImage(heat, 0, 0, base.width, base.height);
+  const unit = Math.max(base.width, base.height);
+  if (data.positive) {
+    ctx.lineWidth = Math.max(2, unit / 300);
+    ctx.strokeStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(data.peak.x * base.width, data.peak.y * base.height, unit * 0.045, 0, Math.PI * 2);
+    ctx.stroke();
   }
-  $("perf-total").textContent = perf.fractured.length + perf.normal.length;
-  $("perf-auc").textContent = perf.roc_auc.toFixed(3);
-  $("perf-chosen").textContent = perf.threshold.toFixed(3);
-  buildStrip();
-  buildRoc();
-  setThreshold(perf.threshold);
-}
-
-function buildStrip() {
-  const svg = svgEl("svg", { viewBox: `0 0 ${STRIP.w} ${STRIP.h}`, class: "strip-svg" });
-  const flagZone = svgEl("rect", { class: "flag-zone", y: 8, height: STRIP.axisY - 8 }, svg);
-  const dots = [];
-  for (const row of ROWS) {
-    const scores = perf[row.key];
-    svgEl("text", { x: STRIP.left, y: row.top - 8, class: "row-label" }, svg).textContent =
-      `${row.label} · ${scores.length}`;
-    scores.forEach((score, i) => {
-      // Deterministic vertical jitter so the picture is the same on every load
-      const jitter = ((i * 0.6180339887) % 1) * (ROW_H - 8) + 4;
-      dots.push({ score, node: svgEl("circle", { cx: stripX(score), cy: row.top + jitter, r: 2.6, class: "dot" }, svg) });
-    });
+  for (const b of sample?.boxes ?? []) {
+    ctx.setLineDash([unit / 90, unit / 140]);
+    ctx.lineWidth = Math.max(1.5, unit / 400);
+    ctx.strokeStyle = "#fff";
+    ctx.strokeRect(b.x * base.width, b.y * base.height, b.w * base.width, b.h * base.height);
   }
-  svgEl("line", { x1: STRIP.left, x2: STRIP.w - STRIP.right, y1: STRIP.axisY, y2: STRIP.axisY, class: "axis" }, svg);
-  for (const t of TICKS) {
-    const x = stripX(t);
-    svgEl("line", { x1: x, x2: x, y1: STRIP.axisY, y2: STRIP.axisY + 4, class: "axis" }, svg);
-    svgEl("text", { x, y: STRIP.axisY + 17, class: "tick", "text-anchor": t === 0 ? "start" : t === 1 ? "end" : "middle" },
-      svg).textContent = t;
-  }
-  const handle = svgEl("g", { class: "handle" }, svg);
-  svgEl("line", { y1: 8, y2: STRIP.axisY, class: "handle-line" }, handle);
-  svgEl("rect", { y: 0, width: 54, height: 18, rx: 4, class: "handle-tag" }, handle);
-  const tagText = svgEl("text", { y: 13, class: "handle-text", "text-anchor": "middle" }, handle);
-
-  els.strip = $("strip");
-  els.strip.replaceChildren(svg);
-  stripParts = { svg, dots, handle, flagZone, tagText };
-
-  const fromPointer = (e) => {
-    const rect = svg.getBoundingClientRect();
-    setThreshold(stripScore(((e.clientX - rect.left) / rect.width) * STRIP.w));
-  };
-  svg.addEventListener("pointerdown", (e) => {
-    svg.setPointerCapture(e.pointerId);
-    svg.classList.add("dragging");
-    fromPointer(e);
-  });
-  svg.addEventListener("pointermove", (e) => { if (svg.hasPointerCapture(e.pointerId)) fromPointer(e); });
-  svg.addEventListener("pointerup", () => svg.classList.remove("dragging"));
-  els.strip.addEventListener("keydown", (e) => {
-    const step = e.shiftKey ? 0.05 : 0.01;
-    const u = Math.sqrt(perfThreshold);
-    const next = { ArrowLeft: u - step, ArrowDown: u - step, ArrowRight: u + step, ArrowUp: u + step,
-      Home: 0, End: 1 }[e.key];
-    if (next === undefined) return;
-    e.preventDefault();
-    setThreshold(Math.min(1, Math.max(0, next)) ** 2);
-  });
+  return canvas.toDataURL("image/jpeg", 0.92);
 }
 
-function rocPoints() {
-  const all = [...perf.fractured.map((s) => [s, 1]), ...perf.normal.map((s) => [s, 0])].sort((a, b) => b[0] - a[0]);
-  const P = perf.fractured.length, N = perf.normal.length;
-  const points = [[0, 0]];
-  let tp = 0, fp = 0;
-  all.forEach(([score, y], i) => {
-    y ? tp++ : fp++;
-    if (i === all.length - 1 || all[i + 1][0] !== score) points.push([fp / N, tp / P]);
-  });
-  return points;
+async function openReport() {
+  if (!last) return;
+  const { data, sample, name, bytes, at } = last;
+  const t = modelInfo.test;
+  const c = testCounts();
+  const missedPer100 = Math.round((1 - c.caught / c.P) * 100);
+  const ppv = c.caught / (c.caught + c.falseAlarms);
+  const when = at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const two = (n) => String(n).padStart(2, "0");
+  const reportId = `FS-${at.getFullYear()}${two(at.getMonth() + 1)}${two(at.getDate())}-${two(at.getHours())}${two(at.getMinutes())}`;
+  const kv = (rows) => `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  const annotated = await annotatedImage(data, sample);
+
+  els.report.innerHTML = `
+    <header class="report-head">
+      <div>
+        <div class="report-kicker">AI-assisted fracture screening · research prototype</div>
+        <h1>Screening report</h1>
+      </div>
+      <dl class="report-meta"><dt>Report</dt><dd>${reportId}</dd><dt>Generated</dt><dd>${escapeHtml(when)}</dd></dl>
+    </header>
+    <p class="report-warning"><strong>Not a diagnosis.</strong> This estimate comes from a research model that has not
+      been clinically validated. It is meant to support, never replace, review by a qualified radiologist.</p>
+
+    <section>
+      <h2>1. Study</h2>
+      ${kv([
+        ["Image", `<span class="mono">${escapeHtml(name)}</span>`],
+        ["Size", `${data.size.width} × ${data.size.height} px · ${formatBytes(bytes)}`],
+        ["Body region", sample ? `${capitalise(sample.region)} (from the dataset label)` : "Not provided"],
+        ["Source", sample ? "Held-out FracAtlas test image, not used in training" : "Uploaded on this device, not stored"],
+      ])}
+    </section>
+
+    <section>
+      <h2>2. Model estimate</h2>
+      <p class="report-finding"><span class="level-mark" data-level="${data.level}"></span>${escapeHtml(data.finding)}</p>
+      <p>${escapeHtml(data.confidence_note)}</p>
+      <ol class="scale">${["unlikely", "possible", "likely"].map((l) =>
+        `<li class="${l === data.level ? "on" : ""}">${capitalise(l)}</li>`).join("")}</ol>
+      ${kv([
+        ["Model score", `<span class="mono">${data.score.toFixed(3)}</span> on a 0 to 1 scale; flagged at
+          <span class="mono">${data.threshold.toFixed(3)}</span> or above`],
+        ["What this level meant in testing", levelEvidence(data.level).replace("In testing, of", "Of")],
+        ["Highlighted region", data.positive ? `${regionText(data.peak)}, as displayed` : "None: no fracture suggested"],
+      ])}
+    </section>
+
+    <section>
+      <h2>3. Images</h2>
+      <div class="report-figures">
+        <figure><img src="${data.images.original}" alt="Original X-ray"><figcaption>Original image.</figcaption></figure>
+        <figure><img src="${annotated}" alt="X-ray with the model's attention map"><figcaption>Where the model looked
+          (Grad-CAM).${data.positive ? " Ring: strongest response." : ""}${sample?.boxes.length ? " Dashed box: radiologist's annotation." : ""}
+          This is not an outline of a fracture.</figcaption></figure>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. Suggested review</h2>
+      <p>${NEXT_STEP[data.level]}</p>
+    </section>
+
+    ${sample ? `<section>
+      <h2>5. Reference for this test image</h2>
+      ${kv([
+        ["Radiologist label", sample.label],
+        ...(sample.boxes.length ? [["Attention vs annotation", focusText(data, sample)]] : []),
+      ])}
+    </section>` : ""}
+
+    <section>
+      <h2>${sample ? 6 : 5}. What the model reviewed, and how it was evaluated</h2>
+      <div class="report-cols">
+        <div>
+          <h3>Reviewed for this report</h3>
+          <ul>
+            <li>This single image, converted to grayscale and resized to 384 × 384 pixels.</li>
+            <li>The image and its mirror image; the two scores are averaged.</li>
+            <li>No patient history, symptoms, other views or previous studies.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Evaluated before release</h3>
+          <ul>
+            <li>${t.images} held-out FracAtlas X-rays (${c.P} fractured): ROC-AUC ${t.roc_auc.toFixed(2)},
+              ${c.caught} of ${c.P} fractures flagged, ${pct(1 - c.falseAlarms / c.N)} of healthy X-rays cleared.</li>
+            <li>Held-out patients from a second dataset (children's wrists, Graz): ROC-AUC ${GRAZ_AUC.toFixed(2)}.
+              Other patients from that hospital were used in training.</li>
+            <li>Cut-off chosen on separate validation images: 95% confidence of flagging at least 85% of fractures.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>${sample ? 7 : 6}. Limitations</h2>
+      <ul>
+        <li>Not validated in clinical use, or at any hospital outside its training data.</li>
+        <li>In testing it missed about ${missedPer100} in 100 fractures. A low score does not exclude a fracture.</li>
+        <li>Many flags are false alarms: about ${pct(ppv)} of flagged test X-rays had a fracture.</li>
+        <li>Casts and metal implants can raise the score whether or not a fracture is present.</li>
+        <li>The heat map is coarse (32-pixel cells). Its peak was near the annotated fracture in about
+          ${pct(CAM_HIT_RATE)} of the fractures it flagged.</li>
+        <li>Few hip and shoulder fractures were tested, so results there are less certain.</li>
+      </ul>
+    </section>
+
+    <footer class="report-foot">
+      <span>${escapeHtml(modelInfo.model)} · trained on ${escapeHtml(modelInfo.dataset)} · computed on this device</span>
+      <span>vishwaraj25.github.io/xray-fracture-detection</span>
+    </footer>`;
+  showView("report");
+  els.reportView.scrollTop = 0;
 }
-
-const ROC = { size: 260, pad: 34 };
-const rocX = (fpr) => ROC.pad + fpr * (ROC.size - ROC.pad - 10);
-const rocY = (tpr) => ROC.size - ROC.pad - tpr * (ROC.size - ROC.pad - 10);
-
-function buildRoc() {
-  const svg = svgEl("svg", { viewBox: `0 0 ${ROC.size} ${ROC.size}`, class: "roc-svg", role: "img",
-    "aria-label": `ROC curve, area ${perf.roc_auc.toFixed(3)}` });
-  for (const v of [0, 0.5, 1]) {
-    svgEl("line", { x1: rocX(v), x2: rocX(v), y1: rocY(0), y2: rocY(1), class: "grid" }, svg);
-    svgEl("line", { x1: rocX(0), x2: rocX(1), y1: rocY(v), y2: rocY(v), class: "grid" }, svg);
-    svgEl("text", { x: rocX(v), y: rocY(0) + 15, class: "tick", "text-anchor": "middle" }, svg).textContent = v;
-    svgEl("text", { x: rocX(0) - 7, y: rocY(v) + 4, class: "tick", "text-anchor": "end" }, svg).textContent = v;
-  }
-  svgEl("line", { x1: rocX(0), y1: rocY(0), x2: rocX(1), y2: rocY(1), class: "diagonal" }, svg);
-  const d = rocPoints().map(([x, y], i) => `${i ? "L" : "M"}${rocX(x).toFixed(1)},${rocY(y).toFixed(1)}`).join("");
-  svgEl("path", { d, class: "roc-line" }, svg);
-  svgEl("text", { x: rocX(0.5), y: ROC.size - 4, class: "axis-label", "text-anchor": "middle" }, svg)
-    .textContent = "False alarm rate";
-  svgEl("text", { x: 0, y: 0, class: "axis-label", "text-anchor": "middle",
-    transform: `translate(10 ${rocY(0.5)}) rotate(-90)` }, svg).textContent = "Fractures caught";
-  stripParts.rocDot = svgEl("circle", { r: 5, class: "roc-dot" }, svg);
-  $("roc").replaceChildren(svg);
-}
-
-function setThreshold(t) {
-  perfThreshold = t;
-  const P = perf.fractured.length, N = perf.normal.length;
-  const caught = perf.fractured.filter((s) => s >= t).length;
-  const falseAlarms = perf.normal.filter((s) => s >= t).length;
-  const flagged = caught + falseAlarms;
-
-  const { dots, handle, flagZone, tagText, rocDot } = stripParts;
-  const x = stripX(t);
-  for (const dot of dots) dot.node.classList.toggle("flagged", dot.score >= t);
-  flagZone.setAttribute("x", x);
-  flagZone.setAttribute("width", Math.max(0, STRIP.w - STRIP.right - x));
-  handle.setAttribute("transform", `translate(${x} 0)`);
-  // Keep the value tag inside the plot at both ends
-  const tagX = Math.min(Math.max(x, STRIP.left + 27), STRIP.w - STRIP.right - 27) - x;
-  handle.querySelector(".handle-tag").setAttribute("x", tagX - 27);
-  tagText.setAttribute("x", tagX);
-  tagText.textContent = t.toFixed(3);
-  rocDot.setAttribute("cx", rocX(falseAlarms / N));
-  rocDot.setAttribute("cy", rocY(caught / P));
-
-  $("perf-caught").textContent = caught;
-  $("perf-caught-of").textContent = ` / ${P}`;
-  $("perf-sens").textContent = `${pct(caught / P)} sensitivity · ${P - caught} missed`;
-  $("perf-fp").textContent = falseAlarms;
-  $("perf-fp-of").textContent = ` / ${N}`;
-  $("perf-spec").textContent = `${pct(1 - falseAlarms / N)} of normal X-rays cleared`;
-  $("perf-ppv").textContent = flagged ? pct(caught / flagged) : "–";
-  $("perf-flagged").textContent = `${caught} of ${flagged} flagged X-rays`;
-
-  els.strip.setAttribute("aria-valuenow", t.toFixed(3));
-  els.strip.setAttribute("aria-valuetext",
-    `threshold ${t.toFixed(3)}: ${caught} of ${P} fractures caught, ${falseAlarms} false alarms`);
-  $("perf-reset").hidden = Math.abs(t - perf.threshold) < 1e-9;
-}
-
-$("perf-reset").addEventListener("click", () => setThreshold(perf.threshold));
 
 /* ---------- Helpers ---------- */
 
 function setImage(img, src) {
   return new Promise((resolve) => {
     img.onload = img.onerror = () => resolve();
+    img.src = src;
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
     img.src = src;
   });
 }
@@ -548,6 +554,7 @@ function showToast(message) {
 }
 
 const pct = (v) => `${Math.round(v * 100)}%`;
+const capitalise = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const formatBytes = (b) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`);
 
 renderSteps();

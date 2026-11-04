@@ -123,13 +123,13 @@ const WebModel = (() => {
       }
     }
     const modelInput = resized.toDataURL("image/png");
-    step("preprocess", t, `made square and sharper · ${INPUT}×${INPUT} px`);
+    step("preprocess", t, `grayscale, padded to a square · ${INPUT}×${INPUT} px`);
 
     t = performance.now();
     const out = await session.run({ gray: new ort.Tensor("float32", batch, [2, 1, INPUT, INPUT]) });
     const logits = out.logit.data;
     const score = (sigmoid(logits[0]) + sigmoid(logits[1])) / 2;
-    step("classify", t, "AI model scores the X-ray");
+    step("classify", t, "ResNet-18 on the image and its mirror");
 
     t = performance.now();
     const grid = Float32Array.from(out.cam.data.slice(0, CAM_GRID * CAM_GRID), (v) => Math.max(v, 0));
@@ -164,7 +164,7 @@ const WebModel = (() => {
     const dctx = displayCanvas.getContext("2d");
     dctx.imageSmoothingQuality = "high";
     dctx.drawImage(bitmap, 0, 0, dw, dh);
-    step("explain", t, "heat map of where it looked");
+    step("explain", t, "Grad-CAM heat map");
 
     t = performance.now();
     step("decide", t, `cut-off ${info.threshold.toFixed(2)}`);

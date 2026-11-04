@@ -26,13 +26,14 @@ LIKELY_SCORE = 0.6  # at or above this the model is confident: about 8 in 10 suc
 
 LEVELS = {
     "unlikely": ("Fracture unlikely",
-                 "The model found nothing that looks like a fracture. That does not rule one out, "
-                 "so if it hurts, see a doctor."),
+                 "The model's score is below its cut-off, so it does not suggest a fracture. "
+                 "This does not rule one out: a radiologist should still read the image."),
     "possible": ("Possible fracture",
-                 "The model found something that could be a fracture, but it is not sure. "
-                 "A doctor should look at this X-ray."),
+                 "The score is above the cut-off but not high, so the model is uncertain. "
+                 "A radiologist should review the image."),
     "likely": ("Likely fracture",
-               "The model found clear signs of a fracture. A doctor should confirm this X-ray."),
+               "The score is high, which suggests a fracture is likely. "
+               "This is not a diagnosis: a radiologist should confirm it."),
 }
 
 

@@ -139,21 +139,24 @@ Each stage can also be run on its own, for example `python src/evaluate.py`.
 
 ## Web demo
 
-A minimal black-and-white page, in `docs/`, that runs the CNN in the browser with
+A minimal off-white and off-black site, in `docs/`, that runs the CNN in the browser with
 [ONNX Runtime Web](https://onnxruntime.ai/docs/tutorials/web/). It is plain static files, so it is hosted for free
 on GitHub Pages with no server. The model (22 MB, weights in half precision) downloads while you look around.
 
 - Click one of the 8 held-out examples, or drop, choose or paste your own JPEG or PNG.
-- The steps (open → prepare → look for fractures → where it looked → result) animate as they finish, each with its
-  real timing.
-- The result is one of three plain levels (fracture unlikely, possible or likely) with a sentence on what it means and
-  how often X-rays rated that way were really fractured in testing. The raw score sits under "Technical details".
+- The steps (open → prepare → score → where it looked → estimate) animate as they finish, each with its real timing.
+- The result is an estimate, never a diagnosis: one of three levels (fracture unlikely, possible or likely) with a
+  sentence on what it means, how often X-rays rated that way were really fractured in testing, and the model's test
+  limits. The raw score sits under "Technical details".
+- **View report** opens a short screening report to print or save as PDF: the study, the estimate, the original and
+  annotated images, a suggested review step, what the model reviewed, how it was evaluated, and its limitations.
 - The viewer switches between the original image, the Grad-CAM attention map with its peak ringed, and the exact
   384×384 input the network saw (keys `1`, `2`, `3`; `Esc` for a new analysis).
 - For the examples, the radiologist's fracture box is drawn over the image (key `b` toggles it), and the panel says
   whether the model's attention peak landed on the fracture: the same check as `reports/gradcam.md`.
-- The **Performance** page plots all 627 test X-rays by score. Dragging the threshold updates the fractures caught,
-  false alarms and the point on the ROC curve live.
+- The **How it works** page (`model.html`) covers the data, the model, what was and was not evaluated, the results and
+  the limitations. It plots all 627 test X-rays by score: dragging the threshold updates the fractures caught, false
+  alarms and the point on the ROC curve live.
 
 The browser repeats the Python pipeline (grayscale, pad to a square, score the image and its mirror, Grad-CAM). On 24
 random test X-rays its scores differ from PyTorch's by 0.003 on average (0.016 at most) and every verdict matches.
